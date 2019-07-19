@@ -61,7 +61,8 @@ class Cell(nn.Module):
             """
 
         super(Cell, self).__init__()
-        self.reduction = reduction
+        self.reduction = False
+        reduction_prev = False
 
         if reduction_prev:
             self.preprocess0 = FactorizedReduce(C_prev_prev, C, affine=False)
@@ -145,11 +146,11 @@ class Network(nn.Module):
         self.cells = nn.ModuleList()
         reduction_prev = False
         for i in range(layers):
-            if i in [layers//3, 2*layers//3]:
-                C_curr *= 2
-                reduction = True
-            else:
-                reduction = False
+            # if i in [layers//3, 2*layers//3]:
+            #     C_curr *= 2
+            #     reduction = True
+            # else:
+            reduction = False
             cell = Cell(steps, multiplier, C_prev_prev, C_prev,
                         C_curr, reduction, reduction_prev)
             reduction_prev = reduction
@@ -181,10 +182,10 @@ class Network(nn.Module):
         """
         s0 = s1 = self.stem(input)
         for _, cell in enumerate(self.cells):
-            if cell.reduction:
-                weights = F.softmax(self.alphas_reduce, dim=-1)
-            else:
-                weights = F.softmax(self.alphas_normal, dim=-1)
+            # if cell.reduction:
+            #     weights = F.softmax(self.alphas_reduce, dim=-1)
+            # else:
+            weights = F.softmax(self.alphas_normal, dim=-1)
             # * forward function for Cell
             s0, s1 = s1, cell(s0, s1, weights)
         out = self.global_pooling(s1)
@@ -213,11 +214,11 @@ class Network(nn.Module):
 
         self.alphas_normal = Variable(
             1e-3*torch.randn(k, num_ops).cuda(), requires_grad=True)
-        self.alphas_reduce = Variable(
-            1e-3*torch.randn(k, num_ops).cuda(), requires_grad=True)
+        # self.alphas_reduce = Variable(
+        #     1e-3*torch.randn(k, num_ops).cuda(), requires_grad=True)
         self._arch_parameters = [
             self.alphas_normal,
-            self.alphas_reduce,
+            # self.alphas_reduce
         ]
 
     def arch_parameters(self):
@@ -256,12 +257,12 @@ class Network(nn.Module):
 
         gene_normal = _parse(
             F.softmax(self.alphas_normal, dim=-1).data.cpu().numpy())
-        gene_reduce = _parse(
-            F.softmax(self.alphas_reduce, dim=-1).data.cpu().numpy())
+        # gene_reduce = _parse(
+        #     F.softmax(self.alphas_reduce, dim=-1).data.cpu().numpy())
 
         concat = range(2+self._steps-self._multiplier, self._steps+2)
         genotype = Genotype(
-            normal=gene_normal, normal_concat=concat,
-            reduce=gene_reduce, reduce_concat=concat
+            normal=gene_normal, normal_concat=concat
+            # reduce=gene_reduce, reduce_concat=concat
         )
         return genotype
