@@ -10,7 +10,6 @@ import logging
 import argparse
 import torch.nn as nn
 import torch.utils
-import torchvision.datasets as dset
 import torch.backends.cudnn as cudnn
 from dataloader import DataLoader
 
@@ -108,20 +107,20 @@ def main(args):
 
     # * Data handling here
     train_data = DataLoader(
-        x_path="E:/URBAN_DATASET_BGH/train_x.npy",
-        y_path="E:/URBAN_DATASET_BGH/train_y.npy",
+        x_path="./data/sac/train_x.npy",
+        y_path="./data/sac/train_y.npy",
         batch_size=args.batch_size,
         shuffle=True
     )
-    train_queue = train_data.make_queue()[:5]
+    train_queue = train_data.make_queue()[:4]
 
     val_data = DataLoader(
-        x_path="E:/URBAN_DATASET_BGH/val_x.npy",
-        y_path="E:/URBAN_DATASET_BGH/val_y.npy",
+        x_path="./data/sac/val_x.npy",
+        y_path="./data/sac/val_y.npy",
         batch_size=args.batch_size,
         shuffle=True
     )
-    valid_queue = val_data.make_queue()[:5]
+    valid_queue = val_data.make_queue()[:4]
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, float(args.epochs), eta_min=args.learning_rate_min)
@@ -233,7 +232,7 @@ def infer(valid_queue, model, criterion):
 
 if __name__ == '__main__':
     args = parse_args()
-    args.save = os.path.join(ROOT_PATH, "cnn\\final_model")
+    args.save = os.path.join(ROOT_PATH, "cnn", "final_model")
 
     log_format = '%(asctime)s %(message)s'
     logging.basicConfig(stream=sys.stdout, level=logging.INFO,

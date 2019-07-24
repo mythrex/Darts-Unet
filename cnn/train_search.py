@@ -99,17 +99,17 @@ def main(args):
 
     # * Data handling here
     train_data = DataLoader(
-        x_path="E:/URBAN_DATASET_BGH/train_x.npy",
-        y_path="E:/URBAN_DATASET_BGH/train_y.npy",
+        x_path="./data/orchards/train_x.npy",
+        y_path="./data/orchards/train_y.npy",
         batch_size=args.batch_size,
         shuffle=True
     )
     train_queue = train_data.make_queue()
-    train_queue = train_queue[:int(len(train_queue) * args.train_portion)]
+    # train_queue = train_queue[:int(len(train_queue) * args.train_portion)]
 
     val_data = DataLoader(
-        x_path="E:/URBAN_DATASET_BGH/val_x.npy",
-        y_path="E:/URBAN_DATASET_BGH/val_y.npy",
+        x_path="./data/orchards/val_x.npy",
+        y_path="./data/orchards/val_y.npy",
         batch_size=args.batch_size,
         shuffle=True
     )
@@ -207,6 +207,8 @@ def train(train_queue, valid_queue, model, architect, criterion, optimizer, lr):
 
     # for removing all unions where union = 0
     non_zero_mask = unions != 0
+    print("##########")
+    print(non_zero_mask)
     mIoU = np.mean(intersections[non_zero_mask])/(np.mean(unions[non_zero_mask]) + 1e-6)
     # return here mean iou
     return acc, mIoU
