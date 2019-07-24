@@ -47,7 +47,7 @@ class Cell(nn.Module):
         preprocess1 (function): preprocessing funtion for prev cell
     """
 
-    def __init__(self, steps, multiplier, C_prev_prev, C_prev, C, reduction, reduction_prev):
+    def __init__(self, steps, multiplier, C_prev_prev, C_prev, C, reduction, reduction_prev, cell_type="cell1"):
         """Makes an array of operations for the blocks
 
             Args:
@@ -61,6 +61,7 @@ class Cell(nn.Module):
             """
 
         super(Cell, self).__init__()
+        self.cell_type = cell_type
         self.reduction = False
         reduction_prev = False
 
@@ -77,7 +78,7 @@ class Cell(nn.Module):
         self._bns = nn.ModuleList()
         for i in range(self._steps):
             for j in range(2+i):
-                stride = 2 if reduction and j < 2 else 1
+                stride = 1
                 op = MixedOp(C, stride)
                 self._ops.append(op)
 
@@ -138,7 +139,7 @@ class Network(nn.Module):
 
         C_curr = stem_multiplier*C
         self.stem = nn.Sequential(
-            nn.Conv2d(3, C_curr, 3, padding=1, bias=False),
+            nn.Conv2d(C, C_curr, 3, padding=1, bias=False),
             nn.BatchNorm2d(C_curr)
         )
 
@@ -151,15 +152,32 @@ class Network(nn.Module):
             #     reduction = True
             # else:
             reduction = False
-            cell = Cell(steps, multiplier, C_prev_prev, C_prev,
-                        C_curr, reduction, reduction_prev)
+            if(i % 4 == 0):
+                cell = Cell(steps, multiplier, C_prev_prev, C_prev,
+                            C_curr, reduction, reduction_prev, cell_type="cell1")
+            elif(i % 4 == 1):
+                cell = Cell(steps, multiplier, C_prev_prev, C_prev,
+                            C_curr, reduction, reduction_prev, cell_type="cell2")
+            elif(i % 4 == 2):
+                cell = Cell(steps, multiplier, C_prev_prev, C_prev,
+                            C_curr, reduction, reduction_prev, cell_type="cell3")
+            else:
+                cell = Cell(steps, multiplier, C_prev_prev, C_prev,
+                            C_curr, reduction, reduction_prev, cell_type="cell4")
+
             reduction_prev = reduction
             self.cells += [cell]
             C_prev_prev, C_prev = C_prev, multiplier*C_curr
 
-        self.global_pooling = nn.AdaptiveAvgPool2d(1)
-        self.classifier = nn.Linear(C_prev, num_classes)
-
+        self.sigmoidConv = nn.Sequential(
+            nn.Conv2d(C_prev,
+                1,
+                kernel_size=1,
+                stride=1,
+                padding=0
+            ),
+            nn.Sigmoid()
+        )
         self._initialize_alphas()
 
     def new(self):
@@ -185,13 +203,17 @@ class Network(nn.Module):
             # if cell.reduction:
             #     weights = F.softmax(self.alphas_reduce, dim=-1)
             # else:
-            weights = F.softmax(self.alphas_normal, dim=-1)
+            if(cell.cell_type == "cell1"):
+                weights = F.softmax(self.alphas_cell1, dim=-1)
+            elif(cell.cell_type == "cell2"):
+                weights = F.softmax(self.alphas_cell2, dim=-1)
+            elif(cell.cell_type == "cell3"):
+                weights = F.softmax(self.alphas_cell3, dim=-1)
+            elif(cell.cell_type == "cell4"):
+                weights = F.softmax(self.alphas_cell4, dim=-1)
             # * forward function for Cell
             s0, s1 = s1, cell(s0, s1, weights)
-        out = self.global_pooling(s1)
-        logits = self.classifier(out.view(out.size(0), -1))
-
-        return logits
+        return self.sigmoidConv(s1)
 
     def _loss(self, input, target):
         """[]
@@ -204,7 +226,8 @@ class Network(nn.Module):
             tensor: loss, or creterion fn that is passed
         """
         logits = self(input)
-        return self._criterion(logits, target.long())
+        # print(logits[0].shape, target[0].shape)
+        return self._criterion(logits, target)
 
     def _initialize_alphas(self):
         """initialize the alphas for network
@@ -212,12 +235,21 @@ class Network(nn.Module):
         k = sum(1 for i in range(self._steps) for n in range(2+i))
         num_ops = len(PRIMITIVES)
 
-        self.alphas_normal = Variable(
+        self.alphas_cell1 = Variable(
+            1e-3*torch.randn(k, num_ops).cuda(), requires_grad=True)
+        self.alphas_cell2 = Variable(
+            1e-3*torch.randn(k, num_ops).cuda(), requires_grad=True)
+        self.alphas_cell3 = Variable(
+            1e-3*torch.randn(k, num_ops).cuda(), requires_grad=True)
+        self.alphas_cell4 = Variable(
             1e-3*torch.randn(k, num_ops).cuda(), requires_grad=True)
         # self.alphas_reduce = Variable(
         #     1e-3*torch.randn(k, num_ops).cuda(), requires_grad=True)
         self._arch_parameters = [
-            self.alphas_normal,
+            self.alphas_cell1,
+            self.alphas_cell2,
+            self.alphas_cell3,
+            self.alphas_cell4
             # self.alphas_reduce
         ]
 
@@ -255,14 +287,22 @@ class Network(nn.Module):
                 n += 1
             return gene
 
-        gene_normal = _parse(
-            F.softmax(self.alphas_normal, dim=-1).data.cpu().numpy())
+        gene_cell1 = _parse(
+            F.softmax(self.alphas_cell1, dim=-1).data.cpu().numpy())
+        gene_cell2 = _parse(
+            F.softmax(self.alphas_cell2, dim=-1).data.cpu().numpy())
+        gene_cell3 = _parse(
+            F.softmax(self.alphas_cell3, dim=-1).data.cpu().numpy())
+        gene_cell4 = _parse(
+            F.softmax(self.alphas_cell4, dim=-1).data.cpu().numpy())
         # gene_reduce = _parse(
         #     F.softmax(self.alphas_reduce, dim=-1).data.cpu().numpy())
 
         concat = range(2+self._steps-self._multiplier, self._steps+2)
         genotype = Genotype(
-            normal=gene_normal, normal_concat=concat
-            # reduce=gene_reduce, reduce_concat=concat
+            cell1=gene_cell1, cell1_concat=concat,
+            cell2=gene_cell2, cell2_concat=concat,
+            cell3=gene_cell3, cell3_concat=concat,
+            cell4=gene_cell4, cell4_concat=concat
         )
         return genotype

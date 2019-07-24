@@ -31,22 +31,25 @@ class DataLoader():
         x = np.load(self._x_path)
         x = x.swapaxes(2, 3).swapaxes(1, 2)
         x = x.astype('float')
-        # because mask is B/W
-        # y = np.load(self._y_path)
-        # y = y.astype('float')
-        # y = y.swapaxes(2, 3).swapaxes(1, 2)
-        # y = y / 255
 
         indices = list(range(len(x)))
-        y = np.random.randint(0, 10, x.shape[0])
+
+        # because mask is B/W
+        y = np.load(self._y_path)
+        y = y.astype('float')
+        y = y.swapaxes(2, 3).swapaxes(1, 2)
+
         # shuffle the array
         if self.shuffle:
             np.random.shuffle(indices)
 
         self.X = []
         self.Y = []
-        # for i in tqdm(range(len(x) - self.batch_size + 1)):
-        for i in tqdm(range(10)):
+        self.length = len(x) - self.batch_size + 1
+        for i in tqdm(range(self.length)):
+            # for i in tqdm(range(len(x) - self.batch_size + 1)):
+            # for i in tqdm(range(10)):
+            # for i in range(100):
             self.X.append(x[indices[i: i + self.batch_size]])
             self.Y.append(y[indices[i: i + self.batch_size]])
 

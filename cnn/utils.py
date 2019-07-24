@@ -2,38 +2,38 @@ import os
 import numpy as np
 import torch
 import shutil
-import torchvision.transforms as transforms
+# import torchvision.transforms as transforms
 from torch.autograd import Variable
 
-
-class AvgrageMeter(object):
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.avg = 0
-        self.sum = 0
-        self.cnt = 0
-
-    def update(self, val, n=1):
-        self.sum += val * n
-        self.cnt += n
-        self.avg = self.sum / self.cnt
-
-
-def accuracy(output, target, topk=(1,)):
-    maxk = max(topk)
+def accuracy(output, target):
     batch_size = target.size(0)
+    h = target.size(2)
+    w = target.size(3)
 
-    _, pred = output.topk(maxk, 1, True, True)
-    pred = pred.t()
-    correct = pred.eq(target.view(1, -1).expand_as(pred))
+    res = ((output > 0.5).float() == target.float()).sum()
+    return res.float() / (batch_size * h * w)
 
-    res = []
-    for k in topk:
-        correct_k = correct[:k].view(-1).float().sum(0)
-        res.append(correct_k.mul_(100.0/batch_size))
-    return res
+
+def iou(output, target):
+    """Return IoU, intersection, union
+
+    Args:
+        output (tensor): logits/output tensor
+        target (tensor): label/target tensor
+
+    Returns:
+        (tensor, tensor, tensor): iou, intersection, union
+    """
+    output = (output > 0.5).squeeze(1)
+    target = (target == 1).squeeze(1)
+    smoothy = 1e-6
+
+    intersection = (output & target).sum().float()
+    union = (output | target).sum().float()
+
+    iou = (intersection)/(union + smoothy)
+
+    return iou, intersection, union
 
 
 class Cutout(object):
@@ -56,26 +56,6 @@ class Cutout(object):
         mask = mask.expand_as(img)
         img *= mask
         return img
-
-
-def _data_transforms_cifar10(args):
-    CIFAR_MEAN = [0.49139968, 0.48215827, 0.44653124]
-    CIFAR_STD = [0.24703233, 0.24348505, 0.26158768]
-
-    train_transform = transforms.Compose([
-        transforms.RandomCrop(32, padding=4),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize(CIFAR_MEAN, CIFAR_STD),
-    ])
-    if args.cutout:
-        train_transform.transforms.append(Cutout(args.cutout_length))
-
-    valid_transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(CIFAR_MEAN, CIFAR_STD),
-    ])
-    return train_transform, valid_transform
 
 
 def count_parameters_in_MB(model):
