@@ -167,3 +167,76 @@ class FactorizedReduce(nn.Module):
         out = torch.cat([self.conv_1(x), self.conv_2(x[:, :, 1:, 1:])], dim=1)
         out = self.bn(out)
         return out
+
+class FactorizedUp(nn.Module):
+
+  def __init__(self, C_in, C_out, affine=True):
+    super(FactorizedUp, self).__init__()
+#     assert C_out % 2 == 0
+    self.relu = nn.ReLU(inplace=False)
+    self.trans_conv_1 = nn.ConvTranspose2d(C_in, 
+                                     C_out, 
+                                     kernel_size=3,
+                                     stride=2,
+                                     padding=1,
+                                     output_padding=1,
+                                     dilation=1)
+    self.trans_conv_2 = nn.ConvTranspose2d(C_in, 
+                                     C_out, 
+                                     kernel_size=3,
+                                     stride=2,
+                                     padding=1,
+                                     output_padding=1,
+                                     dilation=1) 
+    self.bn = nn.BatchNorm2d(C_out, affine=affine)
+
+  def forward(self, x):
+    x = self.relu(x)
+    out = (self.trans_conv_1(x) + self.trans_conv_2(x)) * 0.5
+#     print("out.shape", out.shape)
+    return out
+
+class FactorizedUp2(nn.Module):
+
+  def __init__(self, C_in, C_out, affine=True):
+    super(FactorizedUp2, self).__init__()
+#     assert C_out % 2 == 0
+    self.relu = nn.ReLU(inplace=False)
+    self.trans_conv_1 = nn.ConvTranspose2d(C_in, 
+                                     C_out, 
+                                     kernel_size=3,
+                                     stride=2,
+                                     padding=1,
+                                     output_padding=1,
+                                     dilation=1)
+    self.trans_conv_2 = nn.ConvTranspose2d(C_in, 
+                                     C_out, 
+                                     kernel_size=3,
+                                     stride=2,
+                                     padding=1,
+                                     output_padding=1,
+                                     dilation=1) 
+    self.bn = nn.BatchNorm2d(C_out, affine=affine)
+
+  def forward(self, x):
+    x = self.relu(x)
+    out = (self.trans_conv_1(x) + self.trans_conv_2(x))
+#     print("out.shape", out.shape)
+    return out
+
+class SkipConnection(nn.Module):
+
+  def __init__(self, C, affine=False):
+    super(SkipConnection, self).__init__()
+    
+    self.relu = nn.ReLU(inplace=False)
+    self.conv = nn.Conv2d(2*C, C, kernel_size=3, stride=1, padding=1, dilation=1)
+    self.bn = nn.BatchNorm2d(C, affine=affine)
+
+  def forward(self, s0, s1):
+    s0 = self.relu(s0)
+    s1 = self.relu(s1)
+    x = torch.cat([s1, s0], dim=1)
+    x = self.conv(x)
+    out = self.bn(x)
+    return out

@@ -22,7 +22,7 @@ ROOT_PATH = os.getcwd()
 
 
 def parse_args():
-    parser = argparse.ArgumentParser("cifar")
+    parser = argparse.ArgumentParser("unet-darts")
     parser.add_argument('--data', type=str, default='./data',
                         help='location of the data corpus')
     parser.add_argument('--batch_size', type=int, default=4, help='batch size')
@@ -34,13 +34,13 @@ def parse_args():
     parser.add_argument('--weight_decay', type=float,
                         default=3e-4, help='weight decay')
     parser.add_argument('--report_freq', type=float,
-                        default=50, help='report frequency')
+                        default=1, help='report frequency')
     parser.add_argument('--gpu', type=int, default=0, help='gpu device id')
-    parser.add_argument('--epochs', type=int, default=50,
+    parser.add_argument('--epochs', type=int, default=100,
                         help='num of training epochs')
     parser.add_argument('--init_channels', type=int,
                         default=3, help='num of init channels')
-    parser.add_argument('--layers', type=int, default=4,
+    parser.add_argument('--layers', type=int, default=5,
                         help='total number of layers')
     parser.add_argument('--model_path', type=str,
                         default='saved_models', help='path to save the model')
@@ -60,7 +60,7 @@ def parse_args():
     parser.add_argument('--grad_clip', type=float,
                         default=5, help='gradient clipping')
     parser.add_argument('--train_portion', type=float,
-                        default=0.5, help='portion of training data')
+                        default=1, help='portion of training data')
     parser.add_argument('--unrolled', action='store_true',
                         default=False, help='use one-step unrolled validation loss')
     parser.add_argument('--arch_learning_rate', type=float,
@@ -73,6 +73,7 @@ def parse_args():
 
 
 CIFAR_CLASSES = 2
+
 
 def main(args):
     if not torch.cuda.is_available():
@@ -91,12 +92,10 @@ def main(args):
     criterion = nn.BCELoss()
     criterion = criterion.cuda()
     model = Network(args.init_channels, CIFAR_CLASSES,
-                    args.layers, False, GENOTYPE)
+                    args.layers, GENOTYPE)
     model = model.cuda()
 
     logging.info("param size = %fMB", utils.count_parameters_in_MB(model))
-
-    # genotype = eval("genotypes.%s" % args.arch)
 
     optimizer = torch.optim.SGD(
         model.parameters(),
@@ -107,31 +106,32 @@ def main(args):
 
     # * Data handling here
     train_data = DataLoader(
-        x_path="./data/sac/train_x.npy",
-        y_path="./data/sac/train_y.npy",
+        x_path="E:/URBAN_DATASET_BGH/train_x.npy",
+        y_path="E:/URBAN_DATASET_BGH/train_y.npy",
         batch_size=args.batch_size,
         shuffle=True
     )
-    train_queue = train_data.make_queue()[:4]
+    train_queue = train_data.make_queue()
+    train_queue = train_queue[:int(len(train_queue) * args.train_portion)]
 
     val_data = DataLoader(
-        x_path="./data/sac/val_x.npy",
-        y_path="./data/sac/val_y.npy",
+        x_path="E:/URBAN_DATASET_BGH/val_x.npy",
+        y_path="E:/URBAN_DATASET_BGH/val_y.npy",
         batch_size=args.batch_size,
         shuffle=True
     )
-    valid_queue = val_data.make_queue()[:4]
+    valid_queue = val_data.make_queue()
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, float(args.epochs), eta_min=args.learning_rate_min)
-    
+
     logging.info('genotype = %s', GENOTYPE)
 
+    mIoUs = [0]
     for epoch in range(args.epochs):
         scheduler.step()
         lr = scheduler.get_lr()[0]
         logging.info('epoch %d lr %e', epoch, lr)
-
 
         # training
         train_acc, train_iou = train(train_queue, model, criterion, optimizer)
@@ -143,19 +143,22 @@ def main(args):
         valid_acc, valid_iou = infer(valid_queue, model, criterion)
         logging.info('Final Valid Acc %f', valid_acc)
         logging.info('Final Valid IoU %f', valid_iou)
+        
+        if(max(mIoUs) <= valid_iou):
+            utils.save(model, os.path.join(args.save, 'opt_weights.pt'))
+            
+        mIoUs.append(valid_iou)
 
-        utils.save(model, os.path.join(args.save, 'weights.pt'))
+        np.save(os.path.join(args.save, "mIoUs.npy"), mIoUs)
 
 
 def train(train_queue, model, criterion, optimizer):
-    # objs = utils.AvgrageMeter()
-    # top1 = utils.AvgrageMeter()
-    # top5 = utils.AvgrageMeter()
     tq = tqdm(train_queue)
     step = 0
     intersections = []
     unions = []
     model.train()
+
     for (input, target) in tq:
         input = torch.tensor(input).float()
         target = torch.tensor(target)
@@ -185,22 +188,23 @@ def train(train_queue, model, criterion, optimizer):
             })
         step += 1
 
-        # for removing all unions where union = 0
+    # for removing all unions where union = 0
+    unions = np.array(unions)
+    intersections = np.array(intersections)
     non_zero_mask = unions != 0
-    mIoU = (np.mean(intersections[non_zero_mask])/(np.mean(unions[non_zero_mask]) + 1e-6))
+    mIoU = (np.mean(intersections[non_zero_mask]) /
+            (np.mean(unions[non_zero_mask]) + 1e-6))
     # return here mean iou
     return acc, mIoU
 
 
 def infer(valid_queue, model, criterion):
-    # objs = utils.AvgrageMeter()
-    # top1 = utils.AvgrageMeter()
-    # top5 = utils.AvgrageMeter()
     model.eval()
     tq = tqdm(valid_queue)
     step = 0
     intersections = []
     unions = []
+
     for (input, target) in tq:
         input = torch.tensor(input).float()
         target = torch.tensor(target)
@@ -213,6 +217,8 @@ def infer(valid_queue, model, criterion):
         acc = utils.accuracy(logits, target)
         iou, intersection, union = utils.iou(logits, target)
 
+        # appending masks here
+
         intersections.append(intersection.item())
         unions.append(union.item())
 
@@ -224,10 +230,12 @@ def infer(valid_queue, model, criterion):
         step += 1
 
     # for removing all unions where union = 0
+    unions = np.array(unions)
+    intersections = np.array(intersections)
     non_zero_mask = unions != 0
-    mIoU = np.mean(intersections[non_zero_mask])/(np.mean(unions[non_zero_mask]) + 1e-6)
+    mIoU = np.mean(intersections[non_zero_mask]) / \
+        (np.mean(unions[non_zero_mask]) + 1e-6)
     return acc, mIoU
-
 
 
 if __name__ == '__main__':

@@ -1,5 +1,5 @@
 import sys
-from final_genotype import genotype
+from final_model.final_genotype import genotype
 from graphviz import Digraph
 import os
 import shutil
@@ -52,8 +52,8 @@ def plot(genotype, filename):
     g.render(filename, view=True)
 
 
-# if __name__ == '__main__':
-#     plot(genotype.cell1, "cell1")
-#     plot(genotype.cell2, "cell2")
-#     plot(genotype.cell3, "cell3")
-#     plot(genotype.cell4, "cell4")
+if __name__ == '__main__':
+    print("Normal Genotype")
+    plot(genotype.normal, "normal")
+    print("Reduce Genotype")
+    plot(genotype.reduce, "reduce")

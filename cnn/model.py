@@ -7,27 +7,25 @@ from utils import drop_path
 
 class Cell(nn.Module):
 
-    def __init__(self, genotype, C_prev_prev, C_prev, C, reduction=False, reduction_prev=False, cell_type="cell1"):
+    def __init__(self, genotype, C_prev_prev, C_prev, C, reduction, reduction_prev, upsample_prev):
         super(Cell, self).__init__()
-        self.cell_type = cell_type
-        self.reduction = False
-        reduction_prev = False
+        self.reduction = reduction
+        reduction_prev = reduction_prev
 
-        self.preprocess0 = ReLUConvBN(C_prev_prev, C, 1, 1, 0)
+        if reduction_prev:
+            self.preprocess0 = FactorizedReduce(C_prev_prev, C)
+        elif upsample_prev:
+            self.preprocess0 = FactorizedUp(C_prev_prev, C, affine=False)
+        else:
+            self.preprocess0 = ReLUConvBN(C_prev_prev, C, 1, 1, 0)
         self.preprocess1 = ReLUConvBN(C_prev, C, 1, 1, 0)
 
-        if self.cell_type == "cell1":
-            op_names, indices = zip(*genotype.cell1)
-            concat = genotype.cell1_concat
-        elif self.cell_type == "cell2":
-            op_names, indices = zip(*genotype.cell2)
-            concat = genotype.cell2_concat
-        elif self.cell_type == "cell3":
-            op_names, indices = zip(*genotype.cell3)
-            concat = genotype.cell3_concat
-        elif self.cell_type == "cell4":
-            op_names, indices = zip(*genotype.cell4)
-            concat = genotype.cell4_concat
+        if reduction:
+            op_names, indices = zip(*genotype.reduce)
+            concat = genotype.reduce_concat
+        else:
+            op_names, indices = zip(*genotype.normal)
+            concat = genotype.normal_concat
         self._compile(C, op_names, indices, concat, reduction)
 
     def _compile(self, C, op_names, indices, concat, reduction):
@@ -38,12 +36,12 @@ class Cell(nn.Module):
 
         self._ops = nn.ModuleList()
         for name, index in zip(op_names, indices):
-            stride = 1
+            stride = 2 if reduction and index < 2 else 1
             op = OPS[name](C, stride, True)
             self._ops += [op]
         self._indices = indices
 
-    def forward(self, s0, s1, drop_prob):
+    def forward(self, s0, s1):
         s0 = self.preprocess0(s0)
         s1 = self.preprocess1(s1)
 
@@ -55,50 +53,96 @@ class Cell(nn.Module):
             op2 = self._ops[2*i+1]
             h1 = op1(h1)
             h2 = op2(h2)
-            if self.training and drop_prob > 0.:
-                if not isinstance(op1, Identity):
-                    h1 = drop_path(h1, drop_prob)
-                if not isinstance(op2, Identity):
-                    h2 = drop_path(h2, drop_prob)
+
             s = h1 + h2
             states += [s]
         return torch.cat([states[i] for i in self._concat], dim=1)
 
 
+class UpsampleCell(nn.Module):
+
+    def __init__(self, genotype, C_prev_prev, C_prev, C):
+        super(UpsampleCell, self).__init__()
+        self.preprocess0 = ReLUConvBN(C_prev_prev, C, 1, 1, 0, affine=False)
+        self.preprocess1 = ReLUConvBN(C_prev, C, 1, 1, 0, affine=False)
+        concat = genotype.normal_concat
+        self.multiplier = len(concat)
+        self.UpConv = nn.ConvTranspose2d(C,
+                                         C*self.multiplier,
+                                         kernel_size=3,
+                                         stride=2,
+                                         padding=1,
+                                         output_padding=1,
+                                         dilation=1)
+        self.reduction = False
+
+    def forward(self, s0, s1):
+        s0 = self.preprocess0(s0)
+        s1 = self.preprocess1(s1)
+
+        s0 = self.UpConv(s0)
+        s1 = self.UpConv(s1)
+
+        return s0 + s1
+
+
 class Network(nn.Module):
 
-    def __init__(self, C, num_classes, layers, auxiliary, genotype):
+    def __init__(self, C, num_classes, layers, genotype):
         super(Network, self).__init__()
-        self._layers = layers
-        self._auxiliary = auxiliary
+        assert layers % 2 == 1
 
-        stem_multiplier = 3
-        C_curr = stem_multiplier*C
+        self._layers = layers
+
+        C_curr = 12
         self.stem = nn.Sequential(
-            nn.Conv2d(3, C_curr, 3, padding=1, bias=False),
+            nn.Conv2d(C, C_curr, 3, padding=1, bias=False),
             nn.BatchNorm2d(C_curr)
         )
 
-        C_prev_prev, C_prev, C_curr = C_curr, C_curr, C
+        C_prev_prev, C_prev, C_curr = C_curr, C_curr, C_curr
         self.cells = nn.ModuleList()
         reduction_prev = False
+
+        self.skip_ops = nn.ModuleList()
+        # Downsample
         for i in range(layers):
-            reduction = False
-            if(i % 4 == 0):
-                cell = Cell(genotype, C_prev_prev, C_prev,
-                            C_curr, reduction, reduction_prev, cell_type="cell1")
-            elif(i % 4 == 1):
-                cell = Cell(genotype, C_prev_prev, C_prev,
-                            C_curr, reduction, reduction_prev, cell_type="cell2")
-            elif(i % 4 == 2):
-                cell = Cell(genotype, C_prev_prev, C_prev,
-                            C_curr, reduction, reduction_prev, cell_type="cell3")
+            if i % 2 == 1:
+                C_curr *= 2
+                reduction = True
+
+                self.skip_ops += [SkipConnection(C_prev)]
             else:
-                cell = Cell(genotype, C_prev_prev, C_prev,
-                            C_curr, reduction, reduction_prev, cell_type="cell4")
+                reduction = False
+
+            cell = Cell(genotype,
+                        C_prev_prev,
+                        C_prev,
+                        C_curr,
+                        reduction,
+                        reduction_prev,
+                        upsample_prev=False)
 
             reduction_prev = reduction
             self.cells += [cell]
+            C_prev_prev, C_prev = C_prev, cell.multiplier*C_curr
+
+        for i in range(layers-1):
+            # Skip operations
+            if i % 2 == 0:
+                C_curr = C_curr // 2
+                cell = UpsampleCell(genotype, C_prev_prev, C_prev, C_curr)
+            else:
+                cell = Cell(genotype,
+                            C_prev_prev,
+                            C_prev,
+                            C_curr,
+                            reduction=False,
+                            reduction_prev=False,
+                            upsample_prev=True)
+
+            self.cells += [cell]
+
             C_prev_prev, C_prev = C_prev, cell.multiplier*C_curr
 
         self.sigmoidConv = nn.Sequential(
@@ -113,8 +157,19 @@ class Network(nn.Module):
 
     def forward(self, input):
         s0 = s1 = self.stem(input)
+        pos = -1
+        middle = self._layers - 1
+        skip_cells = []
+        skip_ops = list(self.skip_ops)
 
-        for _, cell in enumerate(self.cells):
-            s0, s1 = s1, cell(s0, s1, drop_prob=0.)
+        for i, cell in enumerate(self.cells):
+            s0, s1 = s1, cell(s0, s1)
+            # skip operation here
+            if (i < middle and i % 2 == 0):
+                skip_cells.append(s1)
+
+            if (i > middle and i % 2 == 1):
+                s1 = skip_ops[pos](skip_cells[pos], s1)
+                pos -= 1
 
         return self.sigmoidConv(s1)

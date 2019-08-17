@@ -32,27 +32,22 @@ class DataLoader():
         x = x.swapaxes(2, 3).swapaxes(1, 2)
         x = x.astype('float')
 
-        indices = list(range(len(x)))
-
         # because mask is B/W
         y = np.load(self._y_path)
         y = y.astype('float')
         y = y.swapaxes(2, 3).swapaxes(1, 2)
 
-        # shuffle the array
-        if self.shuffle:
-            np.random.shuffle(indices)
 
         self.X = []
         self.Y = []
-        self.length = len(x) - self.batch_size + 1
+        self.length = len(x) // self.batch_size
         for i in tqdm(range(self.length)):
-            # for i in tqdm(range(len(x) - self.batch_size + 1)):
-            # for i in tqdm(range(10)):
-            # for i in range(100):
-            self.X.append(x[indices[i: i + self.batch_size]])
-            self.Y.append(y[indices[i: i + self.batch_size]])
-
+            self.X.append(x[i*self.batch_size: (i + 1)* self.batch_size])
+            self.Y.append(y[i*self.batch_size: (i + 1)* self.batch_size])
+            
+        self.X = np.array(self.X)
+        self.Y = np.array(self.Y)
+        
     def make_queue(self):
         """Make the queue for data
 
@@ -70,4 +65,8 @@ class DataLoader():
         #     np.save('./data/sac/data.npy', np.array(data))
         # else:
         #     data = np.load('./data/sac/data.npy')
-        return list(zip(self.X, self.Y))
+        indices = list(range(self.length))
+        if self.shuffle:
+            np.random.shuffle(indices)
+            
+        return list(zip(self.X[indices], self.Y[indices]))

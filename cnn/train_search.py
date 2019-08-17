@@ -20,7 +20,7 @@ from torch.autograd import Variable
 from model_search import Network
 from architect import Architect
 
-CIFAR_CLASSES = 2
+CLASSES = 2
 
 def parse_args():
     parser = argparse.ArgumentParser("cifar")
@@ -42,7 +42,7 @@ def parse_args():
                         help='num of training epochs')
     parser.add_argument('--init_channels', type=int,
                         default=3, help='num of init channels')
-    parser.add_argument('--layers', type=int, default=4,
+    parser.add_argument('--layers', type=int, default=5,
                         help='total number of layers')
     parser.add_argument('--model_path', type=str,
                         default='saved_models', help='path to save the model')
@@ -58,7 +58,7 @@ def parse_args():
     parser.add_argument('--grad_clip', type=float,
                         default=5, help='gradient clipping')
     parser.add_argument('--train_portion', type=float,
-                        default=0.7, help='portion of training data')
+                        default=1.0, help='portion of training data')
     parser.add_argument('--unrolled', action='store_true',
                         default=False, help='use one-step unrolled validation loss')
     parser.add_argument('--arch_learning_rate', type=float,
@@ -86,7 +86,7 @@ def main(args):
 
     criterion = nn.BCELoss()
     criterion = criterion.cuda()
-    model = Network(args.init_channels, CIFAR_CLASSES, args.layers, criterion)
+    model = Network(args.init_channels, CLASSES, args.layers, criterion)
     model = model.cuda()
 
     logging.info("param size = %fMB", utils.count_parameters_in_MB(model))
@@ -99,17 +99,17 @@ def main(args):
 
     # * Data handling here
     train_data = DataLoader(
-        x_path="./data/orchards/train_x.npy",
-        y_path="./data/orchards/train_y.npy",
+        x_path="E:/URBAN_DATASET_BGH/train_x.npy",
+        y_path="E:/URBAN_DATASET_BGH/train_y.npy",
         batch_size=args.batch_size,
         shuffle=True
     )
     train_queue = train_data.make_queue()
-    # train_queue = train_queue[:int(len(train_queue) * args.train_portion)]
+    train_queue = train_queue[:int(len(train_queue) * args.train_portion)]
 
     val_data = DataLoader(
-        x_path="./data/orchards/val_x.npy",
-        y_path="./data/orchards/val_y.npy",
+        x_path="E:/URBAN_DATASET_BGH/val_x.npy",
+        y_path="E:/URBAN_DATASET_BGH/val_y.npy",
         batch_size=args.batch_size,
         shuffle=True
     )
@@ -120,6 +120,7 @@ def main(args):
 
     architect = Architect(model, args)
 
+    mIoUs = [0]
     for epoch in range(args.epochs):
         scheduler.step()
         lr = scheduler.get_lr()[0]
@@ -131,6 +132,7 @@ def main(args):
         # training
         train_acc, train_iou = train(
             train_queue, valid_queue, model, architect, criterion, optimizer, lr)
+        
         # here should be
         logging.info('Final Train Acc %f', train_acc)
         logging.info('Final Train mIoU %f', train_iou)
@@ -140,8 +142,13 @@ def main(args):
         logging.info('Final Valid Acc %f', valid_acc)
         logging.info('Final Valid mIoU %f', valid_iou)
 
-        utils.save(model, os.path.join(args.save, 'weights.pt'))
-
+        # save the final genotype
+        if(max(mIoUs) < valid_iou):
+            print("Writing the computed genotype tp ./cnn/final_models/final_genotype.py")
+            utils.write_genotype(genotype)
+        
+        mIoUs.append(valid_iou)
+        np.save(os.path.join(args.save,"mIoUs.npy"), mIoUs)
 
 def train(train_queue, valid_queue, model, architect, criterion, optimizer, lr):
     """Trains the network. Gradient step is performed here
@@ -201,14 +208,15 @@ def train(train_queue, valid_queue, model, architect, criterion, optimizer, lr):
         if step % args.report_freq == 0:
             tq.set_postfix({
                 "Acc": acc.item(),
-                "IoU": iou.item()
+                "IoU": iou.item(),
+                "Loss": loss.item()
             })
         step += 1
 
     # for removing all unions where union = 0
+    unions = np.array(unions)
+    intersections = np.array(intersections)
     non_zero_mask = unions != 0
-    print("##########")
-    print(non_zero_mask)
     mIoU = np.mean(intersections[non_zero_mask])/(np.mean(unions[non_zero_mask]) + 1e-6)
     # return here mean iou
     return acc, mIoU
@@ -226,8 +234,8 @@ def infer(valid_queue, model, criterion):
     for (input, target) in tq:
         input = torch.tensor(input).float()
         target = torch.tensor(target)
-        input = Variable(input, volatile=True).cuda()
-        target = Variable(target, volatile=True).cuda().float()
+        input = Variable(input).cuda()
+        target = Variable(target).cuda().float()
 
         logits = model(input)
         loss = criterion(logits, target)
@@ -241,11 +249,14 @@ def infer(valid_queue, model, criterion):
         if step % args.report_freq == 0:
             tq.set_postfix({
                 "Acc": acc.item(),
-                "IoU": iou.item()
+                "IoU": iou.item(),
+                "Loss": loss.item()
             })
         step += 1
 
     # for removing all unions where union = 0
+    unions = np.array(unions)
+    intersections = np.array(intersections)
     non_zero_mask = unions != 0
     mIoU = np.mean(intersections[non_zero_mask]) / (np.mean(unions[non_zero_mask]) + 1e-6)
     return acc, mIoU
