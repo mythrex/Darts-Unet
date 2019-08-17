@@ -1,32 +1,25 @@
-import torch
-import torch.nn as nn
+import tensorflow as tf
+from tensorflow import layers
 
 OPS = {
-    'none': lambda C, stride, affine: Zero(stride),
-    'avg_pool_3x3': lambda C, stride, affine: nn.AvgPool2d(3, stride=stride, padding=1, count_include_pad=False),
-    'max_pool_3x3': lambda C, stride, affine: nn.MaxPool2d(3, stride=stride, padding=1),
-    'skip_connect': lambda C, stride, affine: Identity() if stride == 1 else FactorizedReduce(C, C, affine=affine),
-    'sep_conv_3x3': lambda C, stride, affine: SepConv(C, C, 3, stride, 1, affine=affine),
-    'sep_conv_5x5': lambda C, stride, affine: SepConv(C, C, 5, stride, 2, affine=affine),
-    'sep_conv_7x7': lambda C, stride, affine: SepConv(C, C, 7, stride, 3, affine=affine),
-    'dil_conv_3x3': lambda C, stride, affine: DilConv(C, C, 3, stride, 2, 2, affine=affine),
-    'dil_conv_5x5': lambda C, stride, affine: DilConv(C, C, 5, stride, 4, 2, affine=affine),
-    'conv_7x1_1x7': lambda C, stride, affine: nn.Sequential(
-        nn.ReLU(inplace=False),
-        nn.Conv2d(C, C, (1, 7), stride=(1, stride),
-                  padding=(0, 3), bias=False),
-        nn.Conv2d(C, C, (7, 1), stride=(stride, 1),
-                  padding=(3, 0), bias=False),
-        nn.BatchNorm2d(C, affine=affine)
-    ),
+    'none': lambda C, stride: Zero(stride),
+    'avg_pool_3x3': lambda C, stride: layers.AveragePooling2D(3, strides=stride, padding='same'),
+    'max_pool_3x3': lambda C, stride: layers.MaxPooling2D(3, strides=stride, padding='same'),
+    'skip_connect': lambda C, stride: Identity() if stride == 1 else FactorizedReduce(C, C),
+    'sep_conv_3x3': lambda C, stride: SepConv(C, C, 3, stride, 'same'),
+    'sep_conv_5x5': lambda C, stride: SepConv(C, C, 5, stride, 'same'),
+    'sep_conv_7x7': lambda C, stride: SepConv(C, C, 7, stride, 'same'),
+    'dil_conv_3x3': lambda C, stride: DilConv(C, C, 3, stride, 'same', 2),
+    'dil_conv_5x5': lambda C, stride: DilConv(C, C, 5, stride, 'same', 2),
+    'conv_7x1_1x7': lambda C, stride: Conv_7x1_1x7(C, stride)
 }
 
 
-class ReLUConvBN(nn.Module):
+class ReLUConvBN(tf.keras.layers.Layer):
     """Applies ReLU, Conv and BatchNormalisation operation
     """
 
-    def __init__(self, C_in, C_out, kernel_size, stride, padding, affine=True):
+    def __init__(self, C_in, C_out, kernel_size, stride, padding='same'):
         """Initializes the operation
 
         Args:
@@ -38,14 +31,16 @@ class ReLUConvBN(nn.Module):
             affine (bool), optional): Defaults to True.
         """
         super(ReLUConvBN, self).__init__()
-        self.op = nn.Sequential(
-            nn.ReLU(inplace=False),
-            nn.Conv2d(C_in, C_out, kernel_size, stride=stride,
-                      padding=padding, bias=False),
-            nn.BatchNorm2d(C_out, affine=affine)
-        )
+        self.relu = tf.nn.relu
+        self.conv = layers.Conv2D(filters=C_out,
+                                  kernel_size=kernel_size,
+                                  strides=stride,
+                                  padding='same',
+                                  use_bias=False
+                                  )
+        self.bn = layers.BatchNormalization()
 
-    def forward(self, x):
+    def call(self, x):
         """Applies the ReLU, Conv, BN to input
 
         Args:
@@ -54,24 +49,35 @@ class ReLUConvBN(nn.Module):
         Returns:
             tensor: array or tensor with operations applied on it
         """
-        return self.op(x)
+        x = self.relu(x)
+        x = self.conv(x)
+        x = self.bn(x)
+        return x
 
 
-class DilConv(nn.Module):
+class DilConv(tf.keras.layers.Layer):
     """Applies ReLU, Conv with dilation and BatchNormalisation operation
     """
 
-    def __init__(self, C_in, C_out, kernel_size, stride, padding, dilation, affine=True):
+    def __init__(self, C_in, C_out, kernel_size, stride, padding, dilation):
         super(DilConv, self).__init__()
-        self.op = nn.Sequential(
-            nn.ReLU(inplace=False),
-            nn.Conv2d(C_in, C_in, kernel_size=kernel_size, stride=stride,
-                      padding=padding, dilation=dilation, groups=C_in, bias=False),
-            nn.Conv2d(C_in, C_out, kernel_size=1, padding=0, bias=False),
-            nn.BatchNorm2d(C_out, affine=affine),
-        )
+        self.relu = tf.nn.relu
+        self.dil_conv = layers.Conv2D(filters=C_out,
+                                      kernel_size=kernel_size,
+                                      strides=stride,
+                                      padding=padding,
+                                      dilation_rate=dilation,
+                                      use_bias=False
+                                      )
+        self.conv = layers.Conv2D(filters=C_out,
+                                  kernel_size=1,
+                                  strides=1,
+                                  padding='same',
+                                  use_bias=False
+                                  )
+        self.bn = layers.BatchNormalization()
 
-    def forward(self, x):
+    def call(self, x):
         """Applies the ReLU, Conv, BN to input
 
         Args:
@@ -80,30 +86,48 @@ class DilConv(nn.Module):
         Returns:
             tensor: array or tensor with operations applied on it
         """
-        return self.op(x)
+        x = self.relu(x)
+        x = self.dil_conv(x)
+        x = self.conv(x)
+        x = self.bn(x)
+        return x
 
 
-class SepConv(nn.Module):
+class SepConv(tf.keras.layers.Layer):
     """Applies ReLU, Sep Conv with dilation and BatchNormalisation operation
     """
 
-    def __init__(self, C_in, C_out, kernel_size, stride, padding, affine=True):
-
+    def __init__(self, C_in, C_out, kernel_size, stride, padding):
         super(SepConv, self).__init__()
-        self.op = nn.Sequential(
-            nn.ReLU(inplace=False),
-            nn.Conv2d(C_in, C_in, kernel_size=kernel_size,
-                      stride=stride, padding=padding, groups=C_in, bias=False),
-            nn.Conv2d(C_in, C_in, kernel_size=1, padding=0, bias=False),
-            nn.BatchNorm2d(C_in, affine=affine),
-            nn.ReLU(inplace=False),
-            nn.Conv2d(C_in, C_in, kernel_size=kernel_size, stride=1,
-                      padding=padding, groups=C_in, bias=False),
-            nn.Conv2d(C_in, C_out, kernel_size=1, padding=0, bias=False),
-            nn.BatchNorm2d(C_out, affine=affine),
-        )
+        self.relu = tf.nn.relu
+        self.conv1 = layers.Conv2D(filters=C_in,
+                                   kernel_size=kernel_size,
+                                   strides=stride,
+                                   padding='same',
+                                   use_bias=False
+                                   )
+        self.conv2 = layers.Conv2D(filters=C_in,
+                                   kernel_size=1,
+                                   strides=stride,
+                                   padding='same',
+                                   use_bias=False
+                                   )
+        self.bn1 = layers.BatchNormalization()
+        self.conv3 = layers.Conv2D(filters=C_in,
+                                   kernel_size=kernel_size,
+                                   strides=1,
+                                   padding='same',
+                                   use_bias=False
+                                   )
+        self.conv4 = layers.Conv2D(filters=C_out,
+                                   kernel_size=1,
+                                   strides=1,
+                                   padding='same',
+                                   use_bias=False
+                                   )
+        self.bn2 = layers.BatchNormalization()
 
-    def forward(self, x):
+    def call(self, x):
         """Applies the ReLU, Conv, BN to input
 
         Args:
@@ -112,21 +136,29 @@ class SepConv(nn.Module):
         Returns:
             tensor: array or tensor with operations applied on it
         """
-        return self.op(x)
+        x = self.relu(x)
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.conv3(x)
+        x = self.conv4(x)
+        x = self.bn2(x)
+        return x
 
 
-class Identity(nn.Module):
+class Identity(tf.keras.layers.Layer):
     """Apply the identity operation
     """
 
     def __init__(self):
         super(Identity, self).__init__()
 
-    def forward(self, x):
+    def call(self, x):
         return x
 
 
-class Zero(nn.Module):
+class Zero(tf.keras.layers.Layer):
     """Makes array element zero with given stride
     """
 
@@ -134,27 +166,83 @@ class Zero(nn.Module):
         super(Zero, self).__init__()
         self.stride = stride
 
-    def forward(self, x):
+    def call(self, x):
         if self.stride == 1:
-            return x.mul(0.)
-        return x[:, :, ::self.stride, ::self.stride].mul(0.)
+            return tf.multiply(x, 0)
+        return tf.multiply(x[:, ::self.stride, ::self.stride, :], 0)
 
 
-class FactorizedReduce(nn.Module):
+class FactorizedUp(tf.keras.layers.Layer):
+
+    def __init__(self, C_in, C_out):
+        super(FactorizedUp, self).__init__()
+        self.relu = tf.nn.relu
+        self.trans_conv1 = layers.Conv2DTranspose(filters=C_out,
+                                                  kernel_size=3,
+                                                  strides=2,
+                                                  padding='same',
+                                                  )
+        self.trans_conv2 = layers.Conv2DTranspose(filters=C_out,
+                                                  kernel_size=3,
+                                                  strides=2,
+                                                  padding='same',
+                                                  )
+
+        self.bn = layers.BatchNormalization()
+
+    def call(self, x):
+        x = self.relu(x)
+        out = (self.trans_conv1(x) + self.trans_conv2(x)) * 0.5
+        out = self.bn(out)
+        return out
+
+
+class Conv_7x1_1x7(tf.keras.layers.Layer):
+
+    def __init__(self, C, stride):
+        super(Conv_7x1_1x7, self).__init__()
+        self.relu = tf.nn.relu
+        self.conv1 = layers.Conv2D(filters=C,
+                                   kernel_size=(1, 7),
+                                   strides=(1, stride),
+                                   padding='same',
+                                   use_bias=False)
+        self.conv2 = layers.Conv2D(filters=C,
+                                   kernel_size=(7, 1),
+                                   strides=(stride, 1),
+                                   padding='same',
+                                   use_bias=False)
+        self.bn = layers.BatchNormalization()
+
+    def call(self, x):
+        x = self.relu(x)
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.bn(x)
+        return x
+
+
+class FactorizedReduce(tf.keras.layers.Layer):
     """Applies ReLU, conv with stride=2 and c_out/2 
     """
 
-    def __init__(self, C_in, C_out, affine=True):
+    def __init__(self, C_in, C_out):
         super(FactorizedReduce, self).__init__()
         assert C_out % 2 == 0
-        self.relu = nn.ReLU(inplace=False)
-        self.conv_1 = nn.Conv2d(C_in, C_out // 2, 1,
-                                stride=2, padding=0, bias=False)
-        self.conv_2 = nn.Conv2d(C_in, C_out // 2, 1,
-                                stride=2, padding=0, bias=False)
-        self.bn = nn.BatchNorm2d(C_out, affine=affine)
+        self.relu = tf.nn.relu
+        self.conv_1 = layers.Conv2D(filters=C_out//2,
+                                    kernel_size=1,
+                                    strides=2,
+                                    padding='same',
+                                    use_bias=False)
+        self.conv_2 = layers.Conv2D(filters=C_out//2,
+                                    kernel_size=1,
+                                    strides=2,
+                                    padding='same',
+                                    use_bias=False)
+        self.bn = layers.BatchNormalization()
 
-    def forward(self, x):
+    def call(self, x):
         """concats conv and Batch normalise them
 
         Args:
@@ -164,79 +252,27 @@ class FactorizedReduce(nn.Module):
             tensor: tensor of operations on input
         """
         x = self.relu(x)
-        out = torch.cat([self.conv_1(x), self.conv_2(x[:, :, 1:, 1:])], dim=1)
+        out = tf.concat([self.conv_1(x), self.conv_2(x[:, 1:, 1:, :])], axis=3)
         out = self.bn(out)
         return out
 
-class FactorizedUp(nn.Module):
 
-  def __init__(self, C_in, C_out, affine=True):
-    super(FactorizedUp, self).__init__()
-#     assert C_out % 2 == 0
-    self.relu = nn.ReLU(inplace=False)
-    self.trans_conv_1 = nn.ConvTranspose2d(C_in, 
-                                     C_out, 
-                                     kernel_size=3,
-                                     stride=2,
-                                     padding=1,
-                                     output_padding=1,
-                                     dilation=1)
-    self.trans_conv_2 = nn.ConvTranspose2d(C_in, 
-                                     C_out, 
-                                     kernel_size=3,
-                                     stride=2,
-                                     padding=1,
-                                     output_padding=1,
-                                     dilation=1) 
-    self.bn = nn.BatchNorm2d(C_out, affine=affine)
+class SkipConnection(tf.keras.layers.Layer):
 
-  def forward(self, x):
-    x = self.relu(x)
-    out = (self.trans_conv_1(x) + self.trans_conv_2(x)) * 0.5
-#     print("out.shape", out.shape)
-    return out
+    def __init__(self, C):
+        super(SkipConnection, self).__init__()
+        self.relu = tf.nn.relu
+        self.conv = layers.Conv2D(filters=C,
+                                  kernel_size=3,
+                                  strides=1,
+                                  padding='same',
+                                  use_bias=False)
+        self.bn = layers.BatchNormalization()
 
-class FactorizedUp2(nn.Module):
-
-  def __init__(self, C_in, C_out, affine=True):
-    super(FactorizedUp2, self).__init__()
-#     assert C_out % 2 == 0
-    self.relu = nn.ReLU(inplace=False)
-    self.trans_conv_1 = nn.ConvTranspose2d(C_in, 
-                                     C_out, 
-                                     kernel_size=3,
-                                     stride=2,
-                                     padding=1,
-                                     output_padding=1,
-                                     dilation=1)
-    self.trans_conv_2 = nn.ConvTranspose2d(C_in, 
-                                     C_out, 
-                                     kernel_size=3,
-                                     stride=2,
-                                     padding=1,
-                                     output_padding=1,
-                                     dilation=1) 
-    self.bn = nn.BatchNorm2d(C_out, affine=affine)
-
-  def forward(self, x):
-    x = self.relu(x)
-    out = (self.trans_conv_1(x) + self.trans_conv_2(x))
-#     print("out.shape", out.shape)
-    return out
-
-class SkipConnection(nn.Module):
-
-  def __init__(self, C, affine=False):
-    super(SkipConnection, self).__init__()
-    
-    self.relu = nn.ReLU(inplace=False)
-    self.conv = nn.Conv2d(2*C, C, kernel_size=3, stride=1, padding=1, dilation=1)
-    self.bn = nn.BatchNorm2d(C, affine=affine)
-
-  def forward(self, s0, s1):
-    s0 = self.relu(s0)
-    s1 = self.relu(s1)
-    x = torch.cat([s1, s0], dim=1)
-    x = self.conv(x)
-    out = self.bn(x)
-    return out
+    def call(self, s0, s1):
+        s0 = self.relu(s0)
+        s1 = self.relu(s1)
+        x = tf.concat([s1, s0], axis=3)
+        x = self.conv(x)
+        out = self.bn(x)
+        return out
