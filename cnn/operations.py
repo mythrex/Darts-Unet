@@ -15,6 +15,32 @@ OPS = {
 }
 
 
+class MaxPool3x3(tf.keras.layers.Layer):
+
+    def __init__(self, C, stride):
+        super(MaxPool3x3, self).__init__()
+        self.pool = OPS['max_pool_3x3'](C, stride)
+        self.bn = layers.BatchNormalization()
+
+    def call(self, x):
+        x = self.pool(x)
+        x = self.bn(x)
+        return x
+
+
+class AvgPool3x3(tf.keras.layers.Layer):
+
+    def __init__(self, C, stride):
+        super(AvgPool3x3, self).__init__()
+        self.pool = OPS['avg_pool_3x3'](C, stride)
+        self.bn = layers.BatchNormalization()
+
+    def call(self, x):
+        x = self.pool(x)
+        x = self.bn(x)
+        return x
+
+
 class ReLUConvBN(tf.keras.layers.Layer):
     """Applies ReLU, Conv and BatchNormalisation operation
     """
@@ -276,3 +302,13 @@ class SkipConnection(tf.keras.layers.Layer):
         x = self.conv(x)
         out = self.bn(x)
         return out
+
+
+class Softmax(tf.keras.layers.Layer):
+
+    def __init__(self):
+        super(Softmax, self).__init__()
+        self.op = tf.nn.softmax
+
+    def call(self, x):
+        return self.op(x)
