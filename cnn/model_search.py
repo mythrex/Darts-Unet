@@ -34,7 +34,7 @@ class MixedOp(nn.Module):
 
         Returns:
             tensor: sum of product(weights, operation(x))
-        """
+        """ 
         return sum(w * op(x) for w, op in zip(weights, self._ops))
 
 
@@ -70,7 +70,7 @@ class Cell(nn.Module):
     states = [s0, s1]
     offset = 0
     for i in range(self._steps):
-      s = sum(self._ops[offset+j](h, weights[offset+j]) for j, h in enumerate(states))
+      s = sum(self._ops[offset+j](h, weights[offset+j]  ) for j, h in enumerate(states))
       offset += len(states)
       states.append(s)
 
