@@ -88,16 +88,17 @@ class DilConv(tf.keras.layers.Layer):
     def __init__(self, C_in, C_out, kernel_size, stride, padding, dilation):
         super(DilConv, self).__init__()
         self.relu = tf.nn.relu
+        # ! Since tensorflow does not allow stride > 1 with dilation > 1
         self.dil_conv = layers.Conv2D(filters=C_out,
                                       kernel_size=kernel_size,
-                                      strides=stride,
+                                      strides=1,
                                       padding=padding,
                                       dilation_rate=dilation,
                                       use_bias=False
                                       )
         self.conv = layers.Conv2D(filters=C_out,
                                   kernel_size=1,
-                                  strides=1,
+                                  strides=stride,
                                   padding='same',
                                   use_bias=False
                                   )
@@ -134,7 +135,6 @@ class SepConv(tf.keras.layers.Layer):
                                    )
         self.conv2 = layers.Conv2D(filters=C_in,
                                    kernel_size=1,
-                                   strides=stride,
                                    padding='same',
                                    use_bias=False
                                    )
@@ -147,7 +147,6 @@ class SepConv(tf.keras.layers.Layer):
                                    )
         self.conv4 = layers.Conv2D(filters=C_out,
                                    kernel_size=1,
-                                   strides=1,
                                    padding='same',
                                    use_bias=False
                                    )
