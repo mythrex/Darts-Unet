@@ -13,6 +13,27 @@ import tensorflow as tf
 def get_tensor_at(tensor, msk, i):
     return tf.ragged.boolean_mask(tensor, msk[i])
 
+
+def list_var_name(list_of_tensors):
+    """Gets list of tensor's name
+    """
+    return [var.name for var in list_of_tensors]
+
+
+def get_var(list_of_tensors, prefix_name=None):
+    """Returns the the list of name, tensors with prefix name
+    """
+    if prefix_name is None:
+        return list_var_name(list_of_tensors), list_of_tensors
+    else:
+        specific_tensor = []
+        specific_tensor_name = []
+        for var in list_of_tensors:
+            if var.name.startswith(prefix_name):
+                specific_tensor.append(var)
+                specific_tensor_name.append(var.name)
+        return specific_tensor_name, specific_tensor
+    
 # def get_tensor_at(tensor, msk, i):
 #     return tf.random_uniform([1], 0, 255)
 

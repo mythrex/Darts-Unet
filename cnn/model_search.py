@@ -4,6 +4,7 @@ from genotypes import PRIMITIVES
 from genotypes import Genotype
 from operations import *
 import numpy as np
+from utils import get_tensor_at
 
 
 class MixedOp(Model):
@@ -37,8 +38,13 @@ class MixedOp(Model):
         Returns:
             tensor: sum of product(weights, operation(x))
         """
-        return sum(w * op(x) for w, op in zip(weights, self._ops))
-
+        op_on_x = self._ops[0](x)
+        mask = tf.eye(int(weights.shape[0]), dtype=tf.bool)
+        s = tf.zeros(op_on_x.shape, dtype=op_on_x.dtype)
+        for i in range(len(self._ops)):
+            s += get_tensor_at(weights, mask, i) * self._ops[i](x)
+        return s
+    
 class Cell(Model):
 
     def __init__(self, steps, multiplier, C_prev_prev, C_prev, C, reduction, reduction_prev, upsample_prev):
@@ -56,7 +62,6 @@ class Cell(Model):
         self._multiplier = multiplier
 
         self._ops = []
-        self._bns = []
         for i in range(self._steps):
             for j in range(2+i):
                 stride = 2 if reduction and j < 2 else 1
@@ -77,7 +82,7 @@ class Cell(Model):
             states.append(s)
 
         return tf.concat(states[-self._multiplier:], axis=-1)
-
+    
 class UpsampleCell(Model):
 
     def __init__(self, steps, multiplier, C_prev_prev, C_prev, C):
