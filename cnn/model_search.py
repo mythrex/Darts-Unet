@@ -184,7 +184,7 @@ class Network(Model):
         return model_new
     
     def _loss(self, logits, target):
-        return self._criterion(logits, tf.to_float(target))
+        return self._criterion(logits, tf.dtypes.cast(target, tf.float32))
     
     def call(self, inp):
         s0 = s1 = self.stem_op(inp)
