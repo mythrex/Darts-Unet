@@ -2,14 +2,6 @@ import os
 import numpy as np
 import tensorflow as tf
 
-# def get_tensor_at(tensor, i):
-#     msk = np.identity(tensor.shape[0])[i]
-#     return tf.boolean_mask(tensor, msk)
-
-# def get_tensor_at(tensor, i):
-#     msk = tf.eye(tensor.shape[0])
-#     return tf.boolean_mask(tensor, msk)
-
 def get_tensor_at(tensor, msk, i):
     return tf.ragged.boolean_mask(tensor, msk[i])
 
@@ -33,39 +25,33 @@ def get_var(list_of_tensors, prefix_name=None):
                 specific_tensor.append(var)
                 specific_tensor_name.append(var.name)
         return specific_tensor_name, specific_tensor
+
+def accuracy(output, target):    
+    thresh = 0.5
+    res = tf.logical_and((output > thresh),(target > thresh))
+    return tf.divide(tf.reduce_sum(tf.dtypes.cast(res, tf.int32)), tf.size(output), name="accuracy")
+
+
+def iou(output, target):
+    """Return IoU, intersection, union
+
+    Args:
+        output (tensor): logits/output tensor
+        target (tensor): label/target tensor
+
+    Returns:
+        (tensor, tensor, tensor): iou, intersection, union
+    """
+    output = tf.squeeze((output > 0.5))
+    target = tf.squeeze((target > 0.5))
+    smoothy = 1e-6
     
-# def get_tensor_at(tensor, msk, i):
-#     return tf.random_uniform([1], 0, 255)
+    intersection = tf.reduce_sum(tf.dtypes.cast(tf.logical_and(output, target), tf.float32), name="intersection")
+    union = tf.reduce_sum(tf.dtypes.cast(tf.logical_or(output, target), tf.float32), name="union")
 
-# def accuracy(output, target):
-#     batch_size = target.size(0)
-#     h = target.size(2)
-#     w = target.size(3)
+    iou = tf.divide((intersection), (union + smoothy), name="iou")
 
-#     res = ((output > 0.5).float() == target.float()).sum()
-#     return res.float() / (batch_size * h * w)
-
-
-# def iou(output, target):
-#     """Return IoU, intersection, union
-
-#     Args:
-#         output (tensor): logits/output tensor
-#         target (tensor): label/target tensor
-
-#     Returns:
-#         (tensor, tensor, tensor): iou, intersection, union
-#     """
-#     output = (output > 0.5).squeeze(1)
-#     target = (target == 1).squeeze(1)
-#     smoothy = 1e-6
-
-#     intersection = (output & target).sum().float()
-#     union = (output | target).sum().float()
-
-#     iou = (intersection)/(union + smoothy)
-
-#     return iou, intersection, union
+    return iou, intersection, union
 
 
 # class Cutout(object):
@@ -119,16 +105,16 @@ def get_var(list_of_tensors, prefix_name=None):
 #     return x
 
 
-# def create_exp_dir(path, scripts_to_save=None):
-#     if not os.path.exists(path):
-#         os.mkdir(path)
-#     print('Experiment dir : {}'.format(path))
+def create_exp_dir(path, scripts_to_save=None):
+    if not os.path.exists(path):
+        os.mkdir(path)
+    print('Experiment dir : {}'.format(path))
 
-#     if scripts_to_save is not None:
-#         os.mkdir(os.path.join(path, 'scripts'))
-#         for script in scripts_to_save:
-#             dst_file = os.path.join(path, 'scripts', os.path.basename(script))
-#             shutil.copyfile(script, dst_file)
+    if scripts_to_save is not None:
+        os.mkdir(os.path.join(path, 'scripts'))
+        for script in scripts_to_save:
+            dst_file = os.path.join(path, 'scripts', os.path.basename(script))
+            shutil.copyfile(script, dst_file)
 
 # def write_genotype(genotype, file_name="final_genotype"):
 #     cwd = os.getcwd()

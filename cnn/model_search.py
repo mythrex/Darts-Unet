@@ -174,6 +174,15 @@ class Network(Model):
           self.alphas_reduce,
         ]
     
+    def get_thetas(self):
+        specific_tensor = []
+        specific_tensor_name = []
+        for var in self.trainable_weights:
+            if not 'alphas' in var.name:
+                specific_tensor.append(var)
+                specific_tensor_name.append(var.name)
+        return specific_tensor
+    
     def arch_parameters(self):
         return self._arch_parameters
     

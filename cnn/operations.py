@@ -292,14 +292,12 @@ class SkipConnection(tf.keras.layers.Layer):
                                   strides=1,
                                   padding='same',
                                   use_bias=False)
-        self.bn = layers.BatchNormalization()
 
     def call(self, s0, s1):
         s0 = self.relu(s0)
         s1 = self.relu(s1)
         x = tf.concat([s1, s0], axis=3)
-        x = self.conv(x)
-        out = self.bn(x)
+        out = self.conv(x)
         return out
 
 
