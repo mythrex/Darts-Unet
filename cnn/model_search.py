@@ -125,8 +125,10 @@ class Network(Model):
 
         C_prev_prev, C_prev, C_curr = C_curr, C_curr, C
         self.cells = []
-
+        self.skip_ops = []
+        
         reduction_prev = False
+        
         # For reduction
         for i in range(self.net_layers):
             if i % 2 == 1:
@@ -134,7 +136,7 @@ class Network(Model):
                 reduction = True
             else:
                 reduction = False
-
+                self.skip_ops += [SkipConnection(C_curr)]
             cell = Cell(steps, multiplier, C_prev_prev, C_prev, C_curr,
                         reduction,
                         reduction_prev,
@@ -174,26 +176,17 @@ class Network(Model):
           self.alphas_reduce,
         ]
     
-    def get_thetas(self):
-        specific_tensor = []
-        specific_tensor_name = []
-        for var in self.trainable_weights:
-            if not 'alphas' in var.name:
-                specific_tensor.append(var)
-                specific_tensor_name.append(var.name)
-        return specific_tensor
-    
     def arch_parameters(self):
         return self._arch_parameters
     
-    def new(self):
+    def new(self, inp):
         model_new = Network(self._C, self.net_layers, self._criterion)
         for x, y in zip(model_new.arch_parameters(), self.arch_parameters()):
             x.assign(y)
         return model_new
     
     def _loss(self, logits, target):
-        return self._criterion(logits, tf.dtypes.cast(target, tf.float32))
+        return self._criterion(logits, tf.to_float(target))
     
     def call(self, inp):
         s0 = s1 = self.stem_op(inp)
@@ -216,8 +209,7 @@ class Network(Model):
 
             if (i > middle and i % 2 == 1):
                 C_curr = s1.shape[1]
-                op = SkipConnection(C_curr)
-                s1 = op(self.arr[pos], s1)
+                s1 = self.skip_ops[-pos-1](self.arr[pos], s1)
                 pos -= 1
 
         return self.softmaxConv(s1)
