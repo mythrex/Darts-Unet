@@ -20,14 +20,14 @@ class MixedOp(Model):
         super(MixedOp, self).__init__()
         self._ops = []
         for primitive in PRIMITIVES:
-                op = OPS[primitive](C, stride)
-                if 'pool' in primitive:
-                    if('avg' in primitive):
-                        op = AvgPool3x3(C, stride)
-                    elif('max' in primitive):
-                        op = MaxPool3x3(C, stride)
-                self._ops.append(op)
-        
+            op = OPS[primitive](C, stride)
+            if 'pool' in primitive:
+                if('avg' in primitive):
+                    op = AvgPool3x3(C, stride)
+                elif('max' in primitive):
+                    op = MaxPool3x3(C, stride)
+            self._ops.append(op)
+
     def call(self, x, weights):
         """Converts the discrete set of operation into conitnuous mixed operation
 
@@ -44,7 +44,8 @@ class MixedOp(Model):
         for i in range(len(self._ops)):
             s += get_tensor_at(weights, mask, i) * self._ops[i](x)
         return s
-    
+
+
 class Cell(Model):
 
     def __init__(self, steps, multiplier, C_prev_prev, C_prev, C, reduction, reduction_prev, upsample_prev):
@@ -69,20 +70,22 @@ class Cell(Model):
                 self._ops.append(op)
 
     def call(self, s0, s1, weights):
-    
+
         s0 = self.preprocess0(s0)
         s1 = self.preprocess1(s1)
 
         states = [s0, s1]
         offset = 0
-    
+
         for i in range(self._steps):
-            s = sum(self._ops[offset+j](h, weights[offset+j]) for j, h in enumerate(states))
+            s = sum(self._ops[offset+j](h, weights[offset+j])
+                    for j, h in enumerate(states))
             offset += len(states)
             states.append(s)
 
         return tf.concat(states[-self._multiplier:], axis=-1)
-    
+
+
 class UpsampleCell(Model):
 
     def __init__(self, steps, multiplier, C_prev_prev, C_prev, C):
@@ -91,10 +94,10 @@ class UpsampleCell(Model):
         self.preprocess1 = ReLUConvBN(C_prev, C, 1, 1, 'same')
         self._steps = steps
         self._multiplier = multiplier
-        self.UpConv = layers.Conv2DTranspose(C*self._multiplier, 
-                                        kernel_size=3,
-                                        strides=2,
-                                        padding='same')
+        self.UpConv = layers.Conv2DTranspose(C*self._multiplier,
+                                             kernel_size=3,
+                                             strides=2,
+                                             padding='same')
         self.reduction = False
 
     def call(self, s0, s1, weights):
@@ -106,8 +109,9 @@ class UpsampleCell(Model):
 
         return s0 + s1
 
+
 class Network(Model):
-    
+
     def __init__(self, C, net_layers, criterion, steps=4, multiplier=4, stem_multiplier=3):
         super(Network, self).__init__()
         self._C = C
@@ -120,13 +124,16 @@ class Network(Model):
 
         # stem operation
         self.stem_op = tf.keras.Sequential()
-        self.stem_op.add(tf.keras.layers.Conv2D(C_curr, kernel_size=3, padding='same', use_bias=False))
+        self.stem_op.add(tf.keras.layers.Conv2D(
+            C_curr, kernel_size=3, padding='same', use_bias=False))
         self.stem_op.add(tf.keras.layers.BatchNormalization())
 
         C_prev_prev, C_prev, C_curr = C_curr, C_curr, C
         self.cells = []
+        self.skip_ops = []
 
         reduction_prev = False
+
         # For reduction
         for i in range(self.net_layers):
             if i % 2 == 1:
@@ -134,7 +141,7 @@ class Network(Model):
                 reduction = True
             else:
                 reduction = False
-
+                self.skip_ops += [SkipConnection(C_curr)]
             cell = Cell(steps, multiplier, C_prev_prev, C_prev, C_curr,
                         reduction,
                         reduction_prev,
@@ -148,7 +155,8 @@ class Network(Model):
             if i % 2 == 0:
                 C_curr = C_curr // 2
 
-                cell = UpsampleCell(steps, multiplier, C_prev_prev, C_prev, C_curr)
+                cell = UpsampleCell(steps, multiplier,
+                                    C_prev_prev, C_prev, C_curr)
             else:
                 cell = Cell(steps, multiplier, C_prev_prev, C_prev, C_curr,
                             reduction=False,
@@ -158,43 +166,37 @@ class Network(Model):
             C_prev_prev, C_prev = C_prev, multiplier*C_curr
 
         self.softmaxConv = tf.keras.Sequential()
-        self.softmaxConv.add(tf.keras.layers.Conv2D(1, kernel_size=1, strides=1, padding='same'))
+        self.softmaxConv.add(tf.keras.layers.Conv2D(
+            1, kernel_size=1, strides=1, padding='same'))
         self.softmaxConv.add(Softmax())
 
         self._initialize_alphas()
-    
+
     def _initialize_alphas(self):
         k = sum(1 for i in range(self._steps) for n in range(2+i))
         num_ops = len(PRIMITIVES)
-        
-        self.alphas_normal = tf.Variable(1e-3*tf.random.uniform([k, num_ops]), name='alphas_normal')
-        self.alphas_reduce = tf.Variable(1e-3*tf.random.uniform([k, num_ops]), name='alphas_reduce')
+
+        self.alphas_normal = tf.Variable(
+            1e-3*tf.random.uniform([k, num_ops]), name='alphas_normal')
+        self.alphas_reduce = tf.Variable(
+            1e-3*tf.random.uniform([k, num_ops]), name='alphas_reduce')
         self._arch_parameters = [
-          self.alphas_normal,
-          self.alphas_reduce,
+            self.alphas_normal,
+            self.alphas_reduce,
         ]
-    
-    def get_thetas(self):
-        specific_tensor = []
-        specific_tensor_name = []
-        for var in self.trainable_weights:
-            if not 'alphas' in var.name:
-                specific_tensor.append(var)
-                specific_tensor_name.append(var.name)
-        return specific_tensor
-    
+
     def arch_parameters(self):
         return self._arch_parameters
-    
+
     def new(self):
         model_new = Network(self._C, self.net_layers, self._criterion)
         for x, y in zip(model_new.arch_parameters(), self.arch_parameters()):
             x.assign(y)
         return model_new
-    
+
     def _loss(self, logits, target):
-        return self._criterion(logits, tf.dtypes.cast(target, tf.float32))
-    
+        return self._criterion(logits, tf.to_float(target))
+
     def call(self, inp):
         s0 = s1 = self.stem_op(inp)
         self.arr = []
@@ -216,8 +218,7 @@ class Network(Model):
 
             if (i > middle and i % 2 == 1):
                 C_curr = s1.shape[1]
-                op = SkipConnection(C_curr)
-                s1 = op(self.arr[pos], s1)
+                s1 = self.skip_ops[-pos-1](self.arr[pos], s1)
                 pos -= 1
 
         return self.softmaxConv(s1)
@@ -231,7 +232,8 @@ class Network(Model):
             for i in range(self._steps):
                 end = start + n
                 W = weights[start:end].copy()
-                edges = sorted(range(i + 2), key=lambda x: -max(W[x][k] for k in range(len(W[x])) if k != PRIMITIVES.index('none')))[:2]
+                edges = sorted(range(i + 2), key=lambda x: -max(
+                    W[x][k] for k in range(len(W[x])) if k != PRIMITIVES.index('none')))[:2]
                 for j in edges:
                     k_best = None
                     for k in range(len(W[j])):
@@ -243,12 +245,23 @@ class Network(Model):
                 n += 1
             return gene
 
-            gene_normal = _parse(tf.nn.softmax(self.alphas_normal, axis=-1).numpy())
-            gene_reduce = _parse(tf.nn.softmax(self.alphas_reduce, dim=-1).numpy())
+            gene_normal = _parse(tf.nn.softmax(
+                self.alphas_normal, axis=-1).numpy())
+            gene_reduce = _parse(tf.nn.softmax(
+                self.alphas_reduce, dim=-1).numpy())
 
             concat = range(2+self._steps-self._multiplier, self._steps+2)
             genotype = Genotype(
-            normal=gene_normal, normal_concat=concat,
-            reduce=gene_reduce, reduce_concat=concat
+                normal=gene_normal, normal_concat=concat,
+                reduce=gene_reduce, reduce_concat=concat
             )
             return genotype
+
+    def get_model_thetas(self):
+        specific_tensor = []
+        specific_tensor_name = []
+        for var in self.trainable_weights:
+            if not 'alphas' in var.name:
+                specific_tensor.append(var)
+                specific_tensor_name.append(var.name)
+        return specific_tensor
