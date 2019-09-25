@@ -20,7 +20,7 @@ class MaxPool3x3(tf.keras.layers.Layer):
     def __init__(self, C, stride):
         super(MaxPool3x3, self).__init__()
         self.pool = OPS['max_pool_3x3'](C, stride)
-        self.bn = layers.BatchNormalization()
+        self.bn = Identity()
 
     def call(self, x):
         x = self.pool(x)
@@ -33,7 +33,7 @@ class AvgPool3x3(tf.keras.layers.Layer):
     def __init__(self, C, stride):
         super(AvgPool3x3, self).__init__()
         self.pool = OPS['avg_pool_3x3'](C, stride)
-        self.bn = layers.BatchNormalization()
+        self.bn = Identity()
 
     def call(self, x):
         x = self.pool(x)
@@ -64,7 +64,7 @@ class ReLUConvBN(tf.keras.layers.Layer):
                                   padding='same',
                                   use_bias=False
                                   )
-        self.bn = layers.BatchNormalization()
+        self.bn = Identity()
 
     def call(self, x):
         """Applies the ReLU, Conv, BN to input
@@ -102,7 +102,7 @@ class DilConv(tf.keras.layers.Layer):
                                   padding='same',
                                   use_bias=False
                                   )
-        self.bn = layers.BatchNormalization()
+        self.bn = Identity()
 
     def call(self, x):
         """Applies the ReLU, Conv, BN to input
@@ -138,7 +138,7 @@ class SepConv(tf.keras.layers.Layer):
                                    padding='same',
                                    use_bias=False
                                    )
-        self.bn1 = layers.BatchNormalization()
+        self.bn1 = Identity()
         self.conv3 = layers.Conv2D(filters=C_in,
                                    kernel_size=kernel_size,
                                    strides=1,
@@ -150,7 +150,7 @@ class SepConv(tf.keras.layers.Layer):
                                    padding='same',
                                    use_bias=False
                                    )
-        self.bn2 = layers.BatchNormalization()
+        self.bn2 = Identity()
 
     def call(self, x):
         """Applies the ReLU, Conv, BN to input
@@ -213,7 +213,7 @@ class FactorizedUp(tf.keras.layers.Layer):
                                                   padding='same',
                                                   )
 
-        self.bn = layers.BatchNormalization()
+        self.bn = Identity()
 
     def call(self, x):
         x = self.relu(x)
@@ -237,7 +237,7 @@ class Conv_7x1_1x7(tf.keras.layers.Layer):
                                    strides=(stride, 1),
                                    padding='same',
                                    use_bias=False)
-        self.bn = layers.BatchNormalization()
+        self.bn = Identity()
 
     def call(self, x):
         x = self.relu(x)
@@ -265,7 +265,7 @@ class FactorizedReduce(tf.keras.layers.Layer):
                                     strides=2,
                                     padding='same',
                                     use_bias=False)
-        self.bn = layers.BatchNormalization()
+        self.bn = Identity()
 
     def call(self, x):
         """concats conv and Batch normalise them
