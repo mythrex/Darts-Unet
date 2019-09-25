@@ -257,7 +257,7 @@ class Network(Model):
             )
             return genotype
 
-    def get_model_thetas(self):
+    def get_thetas(self):
         specific_tensor = []
         specific_tensor_name = []
         for var in self.trainable_weights:
