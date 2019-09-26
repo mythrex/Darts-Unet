@@ -22,6 +22,7 @@ from architect import Architect
 
 CLASSES = 2
 
+
 def parse_args():
     parser = argparse.ArgumentParser("cifar")
     parser.add_argument('--data', type=str, default='./data',
@@ -85,7 +86,7 @@ def main(args):
     logging.info("args = %s", args)
 
     criterion = nn.BCELoss()
-    criterion = criterion.cuda()
+    criterion = criterion
     model = Network(args.init_channels, CLASSES, args.layers, criterion)
     model = model.cuda()
 
@@ -132,7 +133,7 @@ def main(args):
         # training
         train_acc, train_iou = train(
             train_queue, valid_queue, model, architect, criterion, optimizer, lr)
-        
+
         # here should be
         logging.info('Final Train Acc %f', train_acc)
         logging.info('Final Train mIoU %f', train_iou)
@@ -146,9 +147,10 @@ def main(args):
         if(max(mIoUs) < valid_iou):
             print("Writing the computed genotype tp ./cnn/final_models/final_genotype.py")
             utils.write_genotype(genotype)
-        
+
         mIoUs.append(valid_iou)
-        np.save(os.path.join(args.save,"mIoUs.npy"), mIoUs)
+        np.save(os.path.join(args.save, "mIoUs.npy"), mIoUs)
+
 
 def train(train_queue, valid_queue, model, architect, criterion, optimizer, lr):
     """Trains the network. Gradient step is performed here
@@ -187,7 +189,7 @@ def train(train_queue, valid_queue, model, architect, criterion, optimizer, lr):
         input_search = Variable(input_search, requires_grad=False).cuda()
         target_search = Variable(
             target_search, requires_grad=False).cuda().float()
-    
+
         architect.step(input, target, input_search, target_search,
                        lr, optimizer, unrolled=args.unrolled)
 
@@ -200,7 +202,7 @@ def train(train_queue, valid_queue, model, architect, criterion, optimizer, lr):
         optimizer.step()
 
         acc = utils.accuracy(logits, target)
-        iou, intersection, union = utils.iou(logits,target)
+        iou, intersection, union = utils.iou(logits, target)
 
         intersections.append(intersection.item())
         unions.append(union.item())
@@ -217,7 +219,8 @@ def train(train_queue, valid_queue, model, architect, criterion, optimizer, lr):
     unions = np.array(unions)
     intersections = np.array(intersections)
     non_zero_mask = unions != 0
-    mIoU = np.mean(intersections[non_zero_mask])/(np.mean(unions[non_zero_mask]) + 1e-6)
+    mIoU = np.mean(intersections[non_zero_mask]) / \
+        (np.mean(unions[non_zero_mask]) + 1e-6)
     # return here mean iou
     return acc, mIoU
 
@@ -241,7 +244,7 @@ def infer(valid_queue, model, criterion):
         loss = criterion(logits, target)
 
         acc = utils.accuracy(logits, target)
-        iou, intersection, union = utils.iou(logits,target)
+        iou, intersection, union = utils.iou(logits, target)
 
         intersections.append(intersection.item())
         unions.append(union.item())
@@ -258,7 +261,8 @@ def infer(valid_queue, model, criterion):
     unions = np.array(unions)
     intersections = np.array(intersections)
     non_zero_mask = unions != 0
-    mIoU = np.mean(intersections[non_zero_mask]) / (np.mean(unions[non_zero_mask]) + 1e-6)
+    mIoU = np.mean(intersections[non_zero_mask]) / \
+        (np.mean(unions[non_zero_mask]) + 1e-6)
     return acc, mIoU
 
 

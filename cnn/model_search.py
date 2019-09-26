@@ -34,7 +34,7 @@ class MixedOp(nn.Module):
 
         Returns:
             tensor: sum of product(weights, operation(x))
-        """ 
+        """
         return sum(w * op(x) for w, op in zip(weights, self._ops))
 
 
@@ -70,7 +70,7 @@ class Cell(nn.Module):
     states = [s0, s1]
     offset = 0
     for i in range(self._steps):
-      s = sum(self._ops[offset+j](h, weights[offset+j]  ) for j, h in enumerate(states))
+      s = sum(self._ops[offset+j](h, weights[offset+j]) for j, h in enumerate(states))
       offset += len(states)
       states.append(s)
 
@@ -166,7 +166,7 @@ class Network(nn.Module):
     self._initialize_alphas()
 
   def new(self):
-    model_new = Network(self._C, self._num_classes, self._layers, self._criterion).cuda()
+    model_new = Network(self._C, self._num_classes, self._layers, self._criterion)
     for x, y in zip(model_new.arch_parameters(), self.arch_parameters()):
         x.data.copy_(y.data)
     return model_new
@@ -195,7 +195,7 @@ class Network(nn.Module):
       if (i > middle and i % 2 == 1):
         # print("Skip Connection on Cell no {} and {}".format(ids[pos], i))
         C_curr = s1.shape[1]
-        op = SkipConnection(C_curr).cuda()
+        op = SkipConnection(C_curr)
         s1 = op(self.arr[pos], s1)
         pos -= 1
 
@@ -209,8 +209,8 @@ class Network(nn.Module):
     k = sum(1 for i in range(self._steps) for n in range(2+i))
     num_ops = len(PRIMITIVES)
 
-    self.alphas_normal = Variable(1e-3*torch.randn(k, num_ops).cuda(), requires_grad=True)
-    self.alphas_reduce = Variable(1e-3*torch.randn(k, num_ops).cuda(), requires_grad=True)
+    self.alphas_normal = Variable(1e-3*torch.randn(k, num_ops), requires_grad=True)
+    self.alphas_reduce = Variable(1e-3*torch.randn(k, num_ops), requires_grad=True)
     self._arch_parameters = [
       self.alphas_normal,
       self.alphas_reduce,
