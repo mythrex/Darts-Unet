@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import tensorflow as tf
+import shutil
 
 def get_tensor_at(tensor, msk, i):
     return tf.ragged.boolean_mask(tensor, msk[i])
@@ -116,14 +117,14 @@ def create_exp_dir(path, scripts_to_save=None):
             dst_file = os.path.join(path, 'scripts', os.path.basename(script))
             shutil.copyfile(script, dst_file)
 
-# def write_genotype(genotype, file_name="final_genotype"):
-#     cwd = os.getcwd()
-#     path = os.path.join(cwd, 'cnn', 'final_model')
+def write_genotype(genotype, file_name="final_genotype"):
+    cwd = os.getcwd()
+    path = os.path.join(cwd, 'cnn', 'final_model')
     
-#     if(not os.path.exists(path)):
-#         os.mkdir(os.path.join(cwd, 'cnn', 'final_model'))
+    if(not os.path.exists(path)):
+        os.mkdir(os.path.join(cwd, 'cnn', 'final_model'))
     
-#     comment = '# This file is auto-generated. This file contains the model searched through train_search'
+    comment = '# This file is auto-generated. This file contains the model searched through train_search'
     
-#     with open(os.path.join(path, '{}.py'.format(file_name)), 'w+') as f:
-#         f.write("{}\n\nfrom collections import namedtuple\n\nGenotype = namedtuple('Genotype', 'normal normal_concat reduce reduce_concat')\n\ngenotype={}".format(comment, genotype))
+    with open(os.path.join(path, '{}.py'.format(file_name)), 'w+') as f:
+        f.write("{}\n\nfrom collections import namedtuple\n\nGenotype = namedtuple('Genotype', 'normal normal_concat reduce reduce_concat')\n\ngenotype={}".format(comment, genotype))
