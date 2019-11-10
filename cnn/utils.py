@@ -119,10 +119,10 @@ def create_exp_dir(path, scripts_to_save=None):
 
 def write_genotype(genotype, file_name="final_genotype"):
     cwd = os.getcwd()
-    path = os.path.join(cwd, 'cnn', 'final_model')
+    path = os.path.join('./final_model')
     
     if(not os.path.exists(path)):
-        os.mkdir(os.path.join(cwd, 'cnn', 'final_model'))
+        os.mkdir(path)
     
     comment = '# This file is auto-generated. This file contains the model searched through train_search'
     

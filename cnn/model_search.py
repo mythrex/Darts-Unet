@@ -206,9 +206,9 @@ class Network(Model):
         middle = self.net_layers - 1
         for i, cell in enumerate(self.cells):
             if cell.reduction:
-                weights = tf.nn.softmax(self.alphas_reduce, axis=-1)
+                weights = tf.nn.softmax(self.alphas_reduce, axis=0)
             else:
-                weights = tf.nn.softmax(self.alphas_normal, axis=-1)
+                weights = tf.nn.softmax(self.alphas_normal, axis=0)
 
             s0, s1 = s1, cell(s0, s1, weights)
 
@@ -221,7 +221,7 @@ class Network(Model):
                 s1 = self.skip_ops[-pos-1](self.arr[pos], s1)
                 pos -= 1
 
-        return self.softmaxConv(s1)
+        return tf.sigmoid(s1)
 
     def genotype(self):
 
@@ -245,17 +245,17 @@ class Network(Model):
                 n += 1
             return gene
 
-            gene_normal = _parse(tf.nn.softmax(
-                self.alphas_normal, axis=-1).numpy())
-            gene_reduce = _parse(tf.nn.softmax(
-                self.alphas_reduce, dim=-1).numpy())
+        gene_normal = _parse(tf.nn.softmax(
+            self.alphas_normal, axis=0).numpy())
+        gene_reduce = _parse(tf.nn.softmax(
+            self.alphas_reduce, dim=0).numpy())
 
-            concat = range(2+self._steps-self._multiplier, self._steps+2)
-            genotype = Genotype(
-                normal=gene_normal, normal_concat=concat,
-                reduce=gene_reduce, reduce_concat=concat
-            )
-            return genotype
+        concat = range(2+self._steps-self._multiplier, self._steps+2)
+        genotype = Genotype(
+            normal=gene_normal, normal_concat=concat,
+            reduce=gene_reduce, reduce_concat=concat
+        )
+        return genotype
 
     def get_thetas(self):
         specific_tensor = []
