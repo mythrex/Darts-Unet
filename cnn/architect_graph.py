@@ -3,7 +3,6 @@ from tensorflow.keras import Model
 import numpy as np
 import utils
 
-
 def _concat(xs):
     """n-d tensor to 1d tensor
 
@@ -68,14 +67,14 @@ class Architect(object):
             w_regularization_loss = 0.25
             logits = self.model(input_train)
             train_loss = self.model._loss(logits, target_train)
-#             train_loss += 1e4*0.25*w_regularization_loss
-            return self._compute_unrolled_step(x_train=input_train, 
-                                               y_train=target_train, 
-                                               x_valid=input_valid, 
-                                               y_valid=target_valid,
-                                               w_var=self.get_model_theta(self.model),
-                                               train_loss=train_loss,
-                                               lr=self.learning_rate
+            train_loss += 1e4*0.25*w_regularization_loss
+            return self._compute_unrolled_step(input_train, 
+                                               target_train, 
+                                               input_valid, 
+                                               target_valid,
+                                               self.get_model_theta(self.model),
+                                               train_loss,
+                                               self.learning_rate
                                               )
         else:
             return self._backward_step(input_valid, target_valid)
@@ -118,9 +117,8 @@ class Architect(object):
             with tf.control_dependencies([optimizer_neg]):
                 train_grads_neg=tf.gradients(train_loss,arch_var)	
                 with tf.control_dependencies([optimizer_back]):
-                    # ! a bug can be here!
-                    leader_opt= self.optimizer
-                    leader_grads=leader_opt.compute_gradients(valid_loss, var_list =unrolled_model.arch_parameters())
+                  leader_opt= self.optimizer
+                  leader_grads=leader_opt.compute_gradients(valid_loss, var_list =unrolled_model.arch_parameters())
         for i,(g,v) in enumerate(leader_grads):
             leader_grads[i]=(g - self.learning_rate * tf.divide(train_grads_pos[i]-train_grads_neg[i],2*R),v)
 

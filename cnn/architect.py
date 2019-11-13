@@ -44,7 +44,7 @@ class Architect(object):
     def get_model_theta(self, model):
         specific_tensor = []
         specific_tensor_name = []
-        for var in model.trainable_weights:
+        for var in model.get_weights():
             if not 'alphas' in var.name:
                 specific_tensor.append(var)
                 specific_tensor_name.append(var.name)

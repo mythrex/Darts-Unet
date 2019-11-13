@@ -40,7 +40,7 @@ class MixedOp(Model):
         """
         op_on_x = self._ops[0](x)
         mask = tf.eye(int(weights.shape[0]), dtype=tf.bool)
-        s = tf.zeros(op_on_x.shape, dtype=op_on_x.dtype)
+        s = tf.zeros_like(op_on_x)
         for i in range(len(self._ops)):
             s += get_tensor_at(weights, mask, i) * self._ops[i](x)
         return s
@@ -165,10 +165,10 @@ class Network(Model):
             self.cells += [cell]
             C_prev_prev, C_prev = C_prev, multiplier*C_curr
 
-        self.softmaxConv = tf.keras.Sequential()
-        self.softmaxConv.add(tf.keras.layers.Conv2D(
+        self.sigmoidConv = tf.keras.Sequential()
+        self.sigmoidConv.add(tf.keras.layers.Conv2D(
             1, kernel_size=1, strides=1, padding='same'))
-        self.softmaxConv.add(Softmax())
+#         self.softmaxConv.add(Softmax())
 
         self._initialize_alphas()
 
@@ -221,7 +221,7 @@ class Network(Model):
                 s1 = self.skip_ops[-pos-1](self.arr[pos], s1)
                 pos -= 1
 
-        return tf.sigmoid(s1)
+        return tf.sigmoid(self.sigmoidConv(s1))
 
     def genotype(self):
 
