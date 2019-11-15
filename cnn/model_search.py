@@ -112,14 +112,15 @@ class UpsampleCell(Model):
 
 class Network(Model):
 
-    def __init__(self, C, net_layers, criterion, steps=4, multiplier=4, stem_multiplier=3):
+    def __init__(self, C, net_layers, criterion, steps=4, multiplier=4, stem_multiplier=3, num_classes=1):
         super(Network, self).__init__()
         self._C = C
         self._criterion = criterion
         self._steps = steps
         self._multiplier = multiplier
         self.net_layers = net_layers
-
+        self.num_classes = num_classes
+        
         C_curr = C*stem_multiplier
 
         # stem operation
@@ -165,9 +166,9 @@ class Network(Model):
             self.cells += [cell]
             C_prev_prev, C_prev = C_prev, multiplier*C_curr
 
-        self.softmaxConv = tf.keras.Sequential()
+        self.softmaxConv = tf.keras.Sequential(name="softmaxConv")
         self.softmaxConv.add(tf.keras.layers.Conv2D(
-            1, kernel_size=1, strides=1, padding='same'))
+            self.num_classes, kernel_size=1, strides=1, padding='same'))
         self.softmaxConv.add(Softmax())
 
         self._initialize_alphas()
@@ -220,8 +221,9 @@ class Network(Model):
                 C_curr = s1.shape[1]
                 s1 = self.skip_ops[-pos-1](self.arr[pos], s1)
                 pos -= 1
-
-        return self.softmaxConv(s1) * args.num_classes
+        logits = tf.argmax(self.softmaxConv(s1), axis=-1, name="output")
+        logits = tf.cast(logits, inp.dtype)
+        return tf.reshape(logits, (logits.shape[0], logits.shape[1], logits.shape[2], 1), name="output_reshaped")
 
     def genotype(self):
         def _parse(weights):

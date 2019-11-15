@@ -308,5 +308,5 @@ class Softmax(tf.keras.layers.Layer):
         self.op = tf.nn.softmax
 
     def call(self, x):
-#         return self.op(x, axis)
-        return x
+        return self.op(x)
+#         return x

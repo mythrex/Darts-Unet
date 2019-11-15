@@ -123,4 +123,7 @@ tags
 data
 pred
 
-cnn/output_dir
+cnn/outputdir
+cnn/final_model
+outputdir
+final_model
