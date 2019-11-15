@@ -15,7 +15,8 @@ Genotype = namedtuple(
 # ]
 
 PRIMITIVES = [
-    'max_pool_3x3'
+    'max_pool_3x3',
+    'none'
 ]
 
 UNET_NAS = Genotype(

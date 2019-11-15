@@ -27,34 +27,6 @@ def get_var(list_of_tensors, prefix_name=None):
                 specific_tensor_name.append(var.name)
         return specific_tensor_name, specific_tensor
 
-def accuracy(output, target):    
-    thresh = 0.5
-    res = tf.logical_and((output > thresh),(target > thresh))
-    return tf.divide(tf.reduce_sum(tf.dtypes.cast(res, tf.int32)), tf.size(output), name="accuracy")
-
-
-def iou(output, target):
-    """Return IoU, intersection, union
-
-    Args:
-        output (tensor): logits/output tensor
-        target (tensor): label/target tensor
-
-    Returns:
-        (tensor, tensor, tensor): iou, intersection, union
-    """
-    output = tf.squeeze((output > 0.5))
-    target = tf.squeeze((target > 0.5))
-    smoothy = 1e-6
-    
-    intersection = tf.reduce_sum(tf.dtypes.cast(tf.logical_and(output, target), tf.float32), name="intersection")
-    union = tf.reduce_sum(tf.dtypes.cast(tf.logical_or(output, target), tf.float32), name="union")
-
-    iou = tf.divide((intersection), (union + smoothy), name="iou")
-
-    return iou, intersection, union
-
-
 # class Cutout(object):
 #     def __init__(self, length):
 #         self.length = length

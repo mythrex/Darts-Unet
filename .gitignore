@@ -122,3 +122,5 @@ tags
 .vscode
 data
 pred
+
+cnn/output_dir

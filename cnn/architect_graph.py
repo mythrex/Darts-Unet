@@ -38,8 +38,21 @@ class Architect(object):
         self.arch_learning_rate = args.arch_learning_rate
         self.optimizer = tf.train.AdamOptimizer(learning_rate=self.arch_learning_rate,
                                                 beta1=0.5,
-                                                beta2=0.999)    
-        self.learning_rate = args.learning_rate
+                                                beta2=0.999)  
+        global_step = tf.train.get_global_step()
+        learning_rate_min = tf.constant(args.learning_rate_min)
+
+        learning_rate = tf.train.exponential_decay(
+            args.learning_rate,
+            global_step,
+            decay_rate=args.learning_rate_decay,
+            decay_steps=args.num_batches_per_epoch,
+            staircase=True,
+        )
+
+        lr = tf.maximum(learning_rate, learning_rate_min)
+        
+        self.learning_rate = lr
 
     def get_model_theta(self, model):
         specific_tensor = []
@@ -63,7 +76,6 @@ class Architect(object):
             unrolled (bool): True if training we need unrolled
         """
         if unrolled:
-#             w_regularization_loss = tf.add_n(utils.get_var(tf.losses.get_regularization_losses(),'network')[1])
             w_regularization_loss = 0.25
             logits = self.model(input_train)
             train_loss = self.model._loss(logits, target_train)
