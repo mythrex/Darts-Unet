@@ -10,8 +10,6 @@ import numpy as np
 import utils
 from tqdm import tqdm
 import shutil
-FLAGS = tf.app.flags.FLAGS
-args = FLAGS
 
 from model_search import Network
 from architect_graph import Architect
@@ -103,12 +101,12 @@ tf.app.flags.DEFINE_integer('throttle_secs',
                             'Minimum Secs to wait before performing eval.')
 
 tf.app.flags.DEFINE_string('model_dir',
-                           './outputdir',
-                           'Model Events and checkpoint folder.')
+                           None,
+                           'Model Events and checkpoint folder. Make sure it is a bucket.')
 
 tf.app.flags.DEFINE_string('data',
-                           '../../dataset',
-                           'Dataset folder for tf records')
+                           None,
+                           'Dataset folder for tf records, better it be bucket')
 
 tf.app.flags.DEFINE_enum('mode',
                          'train_eval',
@@ -119,72 +117,94 @@ tf.app.flags.DEFINE_enum('mode',
 tf.app.flags.DEFINE_bool('use_tpu',
                          True,
                          'If to use tpu')
+
 tf.app.flags.DEFINE_bool('use_host_call',
                          True,
                          'If to use host_call_fn')
+
 tf.app.flags.DEFINE_string('tpu',
                            None,
-                           'Name of Tpu',
-                           flags.mark_flag_as_required)
+                           'Name of Tpu')
 tf.app.flags.DEFINE_string('zone',
                            None,
-                           'Name of Tpu',
-                           flags.mark_flag_as_required)
+                           'Name of zone fo your tpu')
 tf.app.flags.DEFINE_string('project',
                            None,
-                           'Name of Tpu',
-                           flags.mark_flag_as_required)
+                           'Name of Project')
 
 # TPU Config
 tf.app.flags.DEFINE_integer('num_shards',
-                            200,
-                            'Minimum Secs to wait before performing eval.')
+                            None,
+                            'Num Shards')
+tf.app.flags.DEFINE_integer('iterations_per_loop',
+                            300,
+                            'iterations_per_loop')
 
+FLAGS = tf.app.flags.FLAGS
+args = FLAGS
+PARAMS = args.__dict__
 
 def make_inp_fn(filename, mode, batch_size):
-    def _input_fn():
+    
+    def _input_fn(params):
         image_dataset = tf.data.TFRecordDataset(filename)
         W, H = 16, 16
 
-        # Create a dictionary describing the features.
+        # Create a dictionary describing the features.  
         image_feature_description = {
-            'name': tf.FixedLenFeature([], tf.string),
-            'label_encoded': tf.FixedLenFeature([], tf.string),
-            'encoded': tf.FixedLenFeature([], tf.string)
+            'train_name': tf.FixedLenFeature([], tf.string),  
+            'train_x': tf.FixedLenFeature([], tf.string),
+            'train_y': tf.FixedLenFeature([], tf.string),
+            'valid_name': tf.FixedLenFeature([], tf.string),  
+            'valid_x': tf.FixedLenFeature([], tf.string),
+            'valid_y': tf.FixedLenFeature([], tf.string)
         }
-
         def _parse_image_function(example_proto):
             # Parse the input tf.Example proto using the dictionary above.
-            feature = tf.parse_single_example(
-                example_proto, image_feature_description)
-            image = feature['encoded']
-            label = feature['label_encoded']
-            name = feature['name']
+            feature= tf.parse_single_example(example_proto, image_feature_description)
+            train_x = feature['train_x']
+            train_y = feature['train_y']
+            valid_x = feature['valid_x']
+            valid_y = feature['valid_y']
+            train_name = feature['train_name']
+            valid_name = feature['valid_name']
 
-            image = tf.image.decode_png(image, channels=3)
-            label = tf.image.decode_png(label, channels=3)
-
-            image = tf.cast(image, tf.float32)
-            image = tf.image.resize(image, (W, H))
-            label = tf.cast(label, tf.float32)
-            label = tf.image.resize(label, (W, H))
-
-            return image, label
+            train_x = tf.image.decode_png(train_x, channels=3)
+            train_y = tf.image.decode_png(train_y, channels=3)
+            valid_x = tf.image.decode_png(valid_x, channels=3)
+            valid_y = tf.image.decode_png(valid_y, channels=3)
+            
+            
+            train_x = tf.cast(train_x, tf.float32)
+            train_x = tf.image.resize(train_x, (W, H))
+            train_y = tf.cast(train_y, tf.float32)
+            train_y = tf.image.resize(train_y, (W, H))
+            valid_x = tf.cast(valid_x, tf.float32)
+            valid_x = tf.image.resize(valid_x, (W, H))
+            valid_y = tf.cast(valid_y, tf.float32)
+            valid_y = tf.image.resize(valid_y, (W, H))
+            
+            train_y = train_y[:, :, 0]
+            train_y = tf.expand_dims(train_y, axis=-1)
+            
+            valid_y = valid_y[:, :, 0]
+            valid_y = tf.expand_dims(valid_y, axis=-1)
+            
+            return ((train_x, valid_x), (train_y, valid_y))
 
         dataset = image_dataset.map(_parse_image_function)
-
+        
         if mode == tf.estimator.ModeKeys.TRAIN:
-            num_epochs = None  # indefinitely
-            dataset = dataset.shuffle(buffer_size=10 * batch_size)
+            num_epochs = None # indefinitely
+            dataset = dataset.shuffle(buffer_size = 10 * batch_size)
         else:
-            num_epochs = 1  # end-of-input after this
+            num_epochs = 1 # end-of-input after this
 
-        dataset = dataset.repeat(num_epochs).batch(batch_size)
+        dataset = dataset.repeat(num_epochs).batch(batch_size,  drop_remainder=True)
 
         return dataset
-
+    
     return _input_fn
-
 # dummy input function
 def make_inp_fn2(filename, mode, batch_size):
     
@@ -312,13 +332,14 @@ def model_fn(features, labels, mode, params):
         }
         eval_metric_ops = (metric_fn, [y, preds])
         
-        if params['use_host_call']:
+        host_call = None
+        if(args.use_host_call):
             def host_call_fn(global_step, learning_rate):
                 # Outfeed supports int32 but global_step is expected to be int64.
                 global_step = tf.reduce_mean(global_step)
                 global_step = tf.cast(global_step, tf.int64)
 
-                with (tf.contrib.summary.create_file_writer(params['model_dir']).as_default()):
+                with (tf.contrib.summary.create_file_writer(args.model_dir).as_default()):
                     with tf.contrib.summary.always_record_summaries():
                         tf.contrib.summary.scalar(
                             'learning_rate', tf.reduce_mean(learning_rate),
@@ -380,9 +401,9 @@ def model_fn(features, labels, mode, params):
 
 def get_train():
     # ! TODO: change make_inp_fn2 to make_inp_fn
-    return make_inp_fn2(filename=os.path.join(args.data, 'infer/infer-00000-00007.tfrecords'),
+    return make_inp_fn(filename=glob.glob(os.path.join(args.data, '*.tfrecords')),
                         mode=tf.estimator.ModeKeys.TRAIN,
-                        batch_size=args.batch_size)
+                        batch_size=args.train_batch_size)
 
 # Create serving input function
 
@@ -427,14 +448,19 @@ def main(argv):
           iterations_per_loop=1000,
           num_shards=None))
     
+    estimator = tf.estimator.tpu.TPUEstimator(
+        use_tpu=True,
+        model_fn=model_fn,
+        config=config,
+        train_batch_size=args.train_batch_size,
+        eval_batch_size=args.eval_batch_size,
+        params=PARAMS
+    )
+    
     if args.mode == 'train_eval':
-        train_and_evaluate(args.model_dir)
+        train_and_evaluate(args.model_dir, estimator)
 
     elif args.mode == 'eval':
-        config = tf.estimator.RunConfig(save_checkpoints_steps=args.save_checkpoints_steps,
-                                        model_dir=args.model_dir)
-        estimator = tf.estimator.Estimator(model_fn=model_fn,
-                                           config=config)
         # TODO: change input_fn = get_valid()
         estimator.evaluate(input_fn=get_train(), steps=args.steps)
     elif args.mode == 'train':
@@ -442,10 +468,7 @@ def main(argv):
         max_steps = None
         if steps == None:
             max_steps = args.max_steps
-        config = tf.estimator.RunConfig(save_checkpoints_steps=args.save_checkpoints_steps,
-                                        model_dir=args.model_dir)
-        estimator = tf.estimator.Estimator(model_fn=model_fn,
-                                           config=config)
+            
         estimator.train(input_fn=get_train(), max_steps=max_steps, steps=steps)
     else:
         raise NotImplementedError(
@@ -453,4 +476,11 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    tf.flags.mark_flag_as_required('tpu')
+    tf.flags.mark_flag_as_required('zone')
+    tf.flags.mark_flag_as_required('project')
+    tf.flags.mark_flag_as_required('data')
+    tf.flags.mark_flag_as_required('model_dir')
+    
+                           
     tf.app.run(main=main)
