@@ -165,7 +165,7 @@ class Network(Model):
                             upsample_prev=True)
             self.cells += [cell]
             C_prev_prev, C_prev = C_prev, multiplier*C_curr
-        
+
         self.softmaxConv = tf.keras.Sequential(name="softmaxConv")
         self.softmaxConv.add(tf.keras.layers.Conv2D(
             self.num_classes, kernel_size=1, strides=1, padding='same'))
@@ -176,12 +176,11 @@ class Network(Model):
     def _initialize_alphas(self):
         k = sum(1 for i in range(self._steps) for n in range(2+i))
         num_ops = len(PRIMITIVES)
-        alphas_normal = lambda: 1e-3*tf.random.uniform([k, num_ops])
-        alphas_reduce = lambda: 1e-3*tf.random.uniform([k, num_ops])
+
         self.alphas_normal = tf.Variable(
-            alphas_normal, name='alphas_normal')
+            1e-3*tf.random.uniform([k, num_ops]), name='alphas_normal')
         self.alphas_reduce = tf.Variable(
-            alphas_reduce, name='alphas_reduce')
+            1e-3*tf.random.uniform([k, num_ops]), name='alphas_reduce')
         self._arch_parameters = [
             self.alphas_normal,
             self.alphas_reduce,
@@ -191,16 +190,13 @@ class Network(Model):
         return self._arch_parameters
 
     def new(self):
-        model_new = Network(self._C, self.net_layers, self._criterion, num_classes=self.num_classes)
+        model_new = Network(self._C, self.net_layers, self._criterion)
         for x, y in zip(model_new.arch_parameters(), self.arch_parameters()):
             x.assign(y)
         return model_new
 
     def _loss(self, logits, target):
-        b, w, h, c = target.shape
-        y = tf.reshape(tf.cast(target, tf.int64), (b, w, h))
-        y = tf.one_hot(y, self.num_classes, on_value=1.0, off_value=0.0)
-        return self._criterion(y, logits)
+        return self._criterion(logits, tf.to_float(target))
 
     def call(self, inp):
         s0 = s1 = self.stem_op(inp)
@@ -225,7 +221,9 @@ class Network(Model):
                 C_curr = s1.shape[1]
                 s1 = self.skip_ops[-pos-1](self.arr[pos], s1)
                 pos -= 1
-        return self.softmaxConv(s1)
+        logits = tf.argmax(self.softmaxConv(s1), axis=-1, name="output")
+        logits = tf.cast(logits, inp.dtype)
+        return tf.reshape(logits, (logits.shape[0], logits.shape[1], logits.shape[2], 1), name="output_reshaped")
 
     def genotype(self):
         def _parse(weights):

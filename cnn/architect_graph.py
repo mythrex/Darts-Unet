@@ -35,10 +35,15 @@ class Architect(object):
         self.network_momentum = args.momentum
         self.network_weight_decay = args.weight_decay
         self.model = model
+        self.use_tpu = args.use_tpu
+        
         self.arch_learning_rate = args.arch_learning_rate
         self.optimizer = tf.train.AdamOptimizer(learning_rate=self.arch_learning_rate,
                                                 beta1=0.5,
-                                                beta2=0.999)  
+                                                beta2=0.999)
+        if(self.use_tpu):
+            self.optimizer = tf.tpu.CrossShardOptimizer(self.optimizer)
+            
         global_step = tf.train.get_global_step()
         learning_rate_min = tf.constant(args.learning_rate_min)
 
@@ -103,11 +108,13 @@ class Architect(object):
         #w'
         with tf.control_dependencies(copy_weight_opts):
             unrolled_optimizer = tf.train.GradientDescentOptimizer(lr)
+            if(self.use_tpu):
+                unrolled_optimizer = tf.tpu.CrossShardOptimizer(unrolled_optimizer)
             unrolled_optimizer = unrolled_optimizer.minimize(unrolled_train_loss, var_list=unrolled_w_var)
 
         valid_logits = unrolled_model(x_valid)
         valid_loss = unrolled_model._loss(valid_logits, y_valid)
-        tf.summary.scalar('valid_loss', valid_loss)
+#         tf.summary.scalar('valid_loss', valid_loss)
 
         with tf.control_dependencies([unrolled_optimizer]):
             valid_grads = tf.gradients(valid_loss, unrolled_w_var)
@@ -129,8 +136,8 @@ class Architect(object):
             with tf.control_dependencies([optimizer_neg]):
                 train_grads_neg=tf.gradients(train_loss,arch_var)	
                 with tf.control_dependencies([optimizer_back]):
-                  leader_opt= self.optimizer
-                  leader_grads=leader_opt.compute_gradients(valid_loss, var_list =unrolled_model.arch_parameters())
+                    leader_opt= self.optimizer
+                    leader_grads=leader_opt.compute_gradients(valid_loss, var_list =unrolled_model.arch_parameters())
         for i,(g,v) in enumerate(leader_grads):
             leader_grads[i]=(g - self.learning_rate * tf.divide(train_grads_pos[i]-train_grads_neg[i],2*R),v)
 
