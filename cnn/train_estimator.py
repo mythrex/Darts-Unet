@@ -18,6 +18,10 @@ from architect_graph import Architect
 import utils
 from genotypes import Genotype
 
+tf.app.flags.DEFINE_float('seed',
+                          6969,
+                          'Random seed')
+
 # * model related flags
 tf.app.flags.DEFINE_float('momentum',
                           0.9,
@@ -394,4 +398,7 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    # set random seeds
+    tf.random.set_seed(args.seed)
+    np.random.seed(args.seed)
     tf.app.run(main=main)

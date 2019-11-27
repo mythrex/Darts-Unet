@@ -16,6 +16,11 @@ from architect_graph import Architect
 import utils
 from genotypes import Genotype
 
+# config for training
+tf.app.flags.DEFINE_float('seed',
+                          6969,
+                          'Random seed')
+
 # * model related flags
 tf.app.flags.DEFINE_float('momentum',
                           0.9,
@@ -69,9 +74,8 @@ tf.app.flags.DEFINE_integer('num_classes',
                             6,
                             'No of classes')
 
-# TODO: change this later
 tf.app.flags.DEFINE_list('crop_size',
-                         [4, 4],
+                         [512, 512],
                          'image size fed to network')
 
 
@@ -134,11 +138,15 @@ tf.app.flags.DEFINE_string('project',
 
 # TPU Config
 tf.app.flags.DEFINE_integer('num_shards',
-                            None,
+                            8,
                             'Num Shards')
 tf.app.flags.DEFINE_integer('iterations_per_loop',
                             300,
                             'iterations_per_loop')
+
+tf.app.flags.DEFINE_integer('start_delay_secs',
+                            120,
+                            'start_delay_secs')
 
 FLAGS = tf.app.flags.FLAGS
 args = FLAGS
@@ -148,7 +156,7 @@ def make_inp_fn(filename, mode, batch_size):
     
     def _input_fn(params):
         image_dataset = tf.data.TFRecordDataset(filename)
-        W, H = 16, 16
+        W, H = args.crop_size[0], args.crop_size[1]
 
         # Create a dictionary describing the features.  
         image_feature_description = {
@@ -202,34 +210,6 @@ def make_inp_fn(filename, mode, batch_size):
 
         dataset = dataset.repeat(num_epochs).batch(batch_size,  drop_remainder=True)
 
-        return dataset
-    
-    return _input_fn
-# dummy input function
-def make_inp_fn2(filename, mode, batch_size):
-    
-    def _input_fn(params):
-        W, H = args.crop_size[0], args.crop_size[1]
-        NUM_IMAGES = 20
-        if mode == tf.estimator.ModeKeys.TRAIN or mode == tf.estimator.ModeKeys.EVAL:
-            x_train = np.random.randint(0, 256, (NUM_IMAGES // batch_size, batch_size, W, H, 3)).astype(np.float32)
-            y_train = np.random.randint(0, args.num_classes, (NUM_IMAGES // batch_size, batch_size, W, H, 1)).astype(np.float32)
-            x_valid = np.random.randint(0, 256, (NUM_IMAGES // batch_size, batch_size, W, H, 3)).astype(np.float32)
-            y_valid = np.random.randint(0, args.num_classes, (NUM_IMAGES // batch_size, batch_size, W, H, 1)).astype(np.float32)
-            
-            ds = (x_train, x_valid), (y_train, y_valid)
-            dataset = tf.data.Dataset.from_tensor_slices(ds)
-            num_epochs = None # indefinitely
-            dataset = dataset.shuffle(buffer_size = 10 * batch_size)
-        else:
-            x_train = np.random.randint(0, 256, (NUM_IMAGES, W, H, 3)).astype(np.float32)
-            y_train = np.random.randint(0, 6, (NUM_IMAGES, W, H, 1)).astype(np.float32)
-            
-            ds = (x_train, y_train)
-            dataset = tf.data.Dataset.from_tensor_slices(ds)
-            num_epochs = 1 # end-of-input after this
-#         w, h, c = dataset.shape
-        dataset = dataset.repeat(num_epochs)
         return dataset
     
     return _input_fn
@@ -400,13 +380,11 @@ def model_fn(features, labels, mode, params):
 # Create functions to read in respective datasets
 
 def get_train():
-    # ! TODO: change make_inp_fn2 to make_inp_fn
-    return make_inp_fn(filename=glob.glob(os.path.join(args.data, '*.tfrecords')),
+    return make_inp_fn(filename=tf.gfile.Glob(os.path.join(args.data, 'train-search-*-00008.tfrecords')),
                         mode=tf.estimator.ModeKeys.TRAIN,
                         batch_size=args.train_batch_size)
 
 # Create serving input function
-
 
 def serving_input_fn():
     feature_placeholders = {
@@ -431,7 +409,7 @@ def train_and_evaluate(output_dir, estimator):
                                         max_steps=args.max_steps)
     exporter = tf.estimator.LatestExporter('exporter', serving_input_fn)
     eval_spec = tf.estimator.EvalSpec(input_fn=get_train(),
-                                      steps=None, throttle_secs=args.throttle_secs)
+                                      steps=None, start_delay_secs=args.start_delay_secs, throttle_secs=args.throttle_secs)
     tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
 
 def main(argv):
@@ -445,8 +423,8 @@ def main(argv):
       model_dir=args.model_dir,
       save_checkpoints_steps=args.save_checkpoints_steps,
       tpu_config=tf.contrib.tpu.TPUConfig(
-          iterations_per_loop=1000,
-          num_shards=None))
+          iterations_per_loop=args.iterations_per_loop,
+          num_shards=args.num_shards))
     
     estimator = tf.estimator.tpu.TPUEstimator(
         use_tpu=True,
@@ -482,5 +460,8 @@ if __name__ == "__main__":
     tf.flags.mark_flag_as_required('data')
     tf.flags.mark_flag_as_required('model_dir')
     
+    # set random seeds
+    tf.set_random_seed(int(args.seed))
+    np.random.seed(int(args.seed))
                            
     tf.app.run(main=main)
