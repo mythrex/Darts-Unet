@@ -1,10 +1,9 @@
 import sys
-from final_model.final_genotype import genotype
+from final_model.final_genotype_1000 import genotype
 from graphviz import Digraph
 import os
 import shutil
-
-os.environ["PATH"] = os.pathsep + "C:/Program Files (x86)/Graphviz2.38/bin"
+import glob
 
 ROOT_PATH = os.getcwd()
 
@@ -22,6 +21,7 @@ def plot(genotype, filename):
     g.node("c_{k-1}", fillcolor='darkseagreen2')
     assert len(genotype) % 2 == 0
     steps = len(genotype) // 2
+    print(steps)
 
     for i in range(steps):
         g.node(str(i), fillcolor='lightblue')
@@ -42,17 +42,15 @@ def plot(genotype, filename):
     for i in range(steps):
         g.edge(str(i), "c_{k}", fillcolor="gray")
 
-    if(not os.path.exists(os.path.join(ROOT_PATH, "cnn/final_model", "cells"))):
-        os.mkdir(os.path.join(ROOT_PATH, "cnn/final_model", "cells"))
-    else:
-        shutil.rmtree(os.path.join(ROOT_PATH, "cnn/final_model", "cells"))
-        os.mkdir(os.path.join(ROOT_PATH, "cnn/final_model", "cells"))
+    if(not os.path.exists(os.path.join(ROOT_PATH, "final_model", "cells"))):
+        os.mkdir(os.path.join(ROOT_PATH, "final_model", "cells"))
 
-    filename = os.path.join(ROOT_PATH, "cnn/final_model", "cells", filename)
-    g.render(filename, view=True)
+    filename = os.path.join(ROOT_PATH, "final_model", "cells", filename)
+    g.render(filename, view=False)
 
 
 if __name__ == '__main__':
+    files = glob.glob
     print("Normal Genotype")
     plot(genotype.normal, "normal")
     print("Reduce Genotype")

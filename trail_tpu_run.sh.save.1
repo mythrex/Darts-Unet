@@ -4,7 +4,6 @@ python cnn/train_tpu_estimator.py \
 --max_steps=10000 \
 --mode='train_eval' \
 --train_batch_size=16 \
---eval_batch_size=16 \
 --tpu='unet-darts' \
 --zone='us-central1-f' \
 --project='isro-nas' \
@@ -12,8 +11,7 @@ python cnn/train_tpu_estimator.py \
 --data="gs://unet-darts/datasets/train-search" \
 --num_layers=3 \
 --num_shards=8 \
---steps_per_eval=500 \
---save_checkpoints_steps=250 \
---iterations_per_loop=500 \
---num_train_examples=1728 \
---use_host_call=True
+--steps_per_eval=100 \
+--iterations_per_loop=100 \
+--num_train_examples=1728
+-- \use_host_call=False

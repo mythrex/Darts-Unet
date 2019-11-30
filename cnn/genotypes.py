@@ -14,11 +14,6 @@ PRIMITIVES = [
     'dil_conv_5x5'
 ]
 
-# PRIMITIVES = [
-#     'max_pool_3x3',
-#     'none'
-# ]
-
 UNET_NAS = Genotype(
     normal=[
         ('max_pool_3x3', 1),

@@ -211,9 +211,9 @@ class Network(Model):
         middle = self.net_layers - 1
         for i, cell in enumerate(self.cells):
             if cell.reduction:
-                weights = tf.nn.softmax(self.alphas_reduce, axis=0)
+                weights = tf.nn.softmax(self.alphas_reduce, axis=-1)
             else:
-                weights = tf.nn.softmax(self.alphas_normal, axis=0)
+                weights = tf.nn.softmax(self.alphas_normal, axis=-1)
 
             s0, s1 = s1, cell(s0, s1, weights)
 
@@ -226,45 +226,78 @@ class Network(Model):
                 s1 = self.skip_ops[-pos-1](self.arr[pos], s1)
                 pos -= 1
         return self.softmaxConv(s1)
+    
+    def genotype(self, alphas_normal, alphas_reduce):
+            def _parse(weights):
+                gene = []
+                n = 2
+                start = 0
+                for i in range(self._steps):
+                    end = start + n
+                    W = weights[start:end].copy()
+                    edges = sorted(range(i + 2), key=lambda x: -max(W[x][k] for k in range(len(W[x])) if k != PRIMITIVES.index('none')))[:2]
+                    for j in edges:
+                        k_best = None
+                        for k in range(len(W[j])):
+                            if k != PRIMITIVES.index('none'):
+                                if k_best is None or W[j][k] > W[j][k_best]:
+                                    k_best = k
+                        gene.append((PRIMITIVES[k_best], j))
+                    start = end
+                    n += 1
+                return gene
 
-    def genotype(self):
-        def _parse(weights):
-            primitives = tf.convert_to_tensor(PRIMITIVES)
-            gene = []
-            n = 2
-            start = 0
-            for i in range(self._steps):
-                end = start + n
-                W = tf.identity(weights[start:end])
-                none_idx = PRIMITIVES.index('none')
-                # make none_weight to be -inf
-                mask = np.ones(W.shape)
-                mask[:, none_idx] = -1
-                W = W * tf.convert_to_tensor(mask, dtype=W.dtype)        
-                # calc of edges
-                W_sorted = tf.sort(W, axis=-1, direction='DESCENDING', name='sorted_weights')
-                edges = tf.argsort(W_sorted[:,0], axis=-1, direction='DESCENDING', name='edges')[:2]
+            gene_normal = _parse(alphas_normal)
+            gene_reduce = _parse(alphas_reduce)
 
-                for idx in range(edges.shape[0]):
-                    j = edges[idx] 
-                    k_best = tf.argsort(W, axis=-1, direction='DESCENDING', name='k_best')[j][0]
+            concat = range(2+self._steps-self._multiplier, self._steps+2)
+            genotype = Genotype(
+              normal=gene_normal, normal_concat=concat,
+              reduce=gene_reduce, reduce_concat=concat
+            )
+            return genotype
+                
+#     def genotype(self):
+#         def _parse(weights):
+#             with tf.variable_scope("parse"):
+#                 primitives = tf.convert_to_tensor(PRIMITIVES)
+#                 gene = []
+#                 n = 2
+#                 start = 0
+#                 for i in range(self._steps):
+#                     end = start + n
+#                     W = tf.identity(weights[start:end], name="alphas_for_op_strided")
+#                     none_idx = PRIMITIVES.index('none')
+#                     # make none_weight to be -inf
+#                     mask = np.ones(W.shape)
+#                     mask[:, none_idx] = -1
+#                     W = W * tf.convert_to_tensor(mask, dtype=W.dtype)        
+#                     # calc of edges
+#                     W_sorted = tf.sort(W, axis=-1, direction='DESCENDING', name='sorted_weights')
+#                     edges = tf.argsort(W_sorted[:,0], axis=-1, direction='DESCENDING', name='edges')[:2]
 
-                    gene.append((primitives[k_best], j))
-                start = end
-                n += 1
-            return gene
+#                     for idx in range(edges.shape[0]):
+#                         j = edges[idx]
+#                         j = tf.identity(j, name="selected_op")
+#                         k_best = tf.argsort(W, axis=-1, direction='DESCENDING', name='k_best')[j][0]
+#                         sel_block = primitives[k_best]
+#                         sel_block = tf.identity(sel_block, name="selected_block")
+#                         gene.append((sel_block, j))
+#                     start = end
+#                     n += 1
+#                 return gene
 
-        gene_normal = _parse(tf.nn.softmax(
-            self.alphas_normal, axis=-1))
-        gene_reduce = _parse(tf.nn.softmax(
-            self.alphas_reduce, axis=-1))
+#         gene_normal = _parse(tf.nn.softmax(
+#             self.alphas_normal, axis=-1))
+#         gene_reduce = _parse(tf.nn.softmax(
+#             self.alphas_reduce, axis=-1))
 
-        concat = range(2+self._steps-self._multiplier, self._steps+2)
-        genotype = Genotype(
-            normal=gene_normal, normal_concat=concat,
-            reduce=gene_reduce, reduce_concat=concat
-        )
-        return genotype
+#         concat = range(2+self._steps-self._multiplier, self._steps+2)
+#         genotype = Genotype(
+#             normal=gene_normal, normal_concat=concat,
+#             reduce=gene_reduce, reduce_concat=concat
+#         )
+#         return genotype
 
     def get_thetas(self):
         specific_tensor = []

@@ -10,6 +10,8 @@ import numpy as np
 import utils
 from tqdm import tqdm
 import shutil
+import time
+from scipy.special import softmax
 
 from model_search import Network
 from architect_graph import Architect
@@ -75,7 +77,7 @@ tf.app.flags.DEFINE_integer('num_classes',
                             'No of classes')
 
 tf.app.flags.DEFINE_list('crop_size',
-                         [512, 512],
+                         [128, 128],
                          'image size fed to network')
 
 
@@ -100,10 +102,6 @@ tf.app.flags.DEFINE_integer('save_checkpoints_steps',
                             100,
                             'Save Checkpoints and perform eval after these many steps')
 
-tf.app.flags.DEFINE_integer('throttle_secs',
-                            200,
-                            'Minimum Secs to wait before performing eval.')
-
 tf.app.flags.DEFINE_string('model_dir',
                            None,
                            'Model Events and checkpoint folder. Make sure it is a bucket.')
@@ -113,9 +111,13 @@ tf.app.flags.DEFINE_string('data',
                            'Dataset folder for tf records, better it be bucket')
 
 tf.app.flags.DEFINE_enum('mode',
-                         'train_eval',
+                         'train',
                          ['train_eval', 'eval', 'train'],
 			 'mode=train/eval/train_eval')
+
+tf.app.flags.DEFINE_integer('num_train_examples',
+                            2000,
+                            'Num Train Examples')
 
 # TPU related flags
 tf.app.flags.DEFINE_bool('use_tpu',
@@ -140,17 +142,22 @@ tf.app.flags.DEFINE_string('project',
 tf.app.flags.DEFINE_integer('num_shards',
                             8,
                             'Num Shards')
-tf.app.flags.DEFINE_integer('iterations_per_loop',
-                            300,
-                            'iterations_per_loop')
+tf.app.flags.DEFINE_integer(
+    'iterations_per_loop', default=500,
+    help=('Number of steps to run on TPU before outfeeding metrics to the CPU.'
+          ' If the number of iterations in the loop would exceed the number of'
+          ' train steps, the loop will exit before reaching'
+          ' --iterations_per_loop. The larger this value is, the higher the'
+          ' utilization on the TPU.'))
 
-tf.app.flags.DEFINE_integer('start_delay_secs',
-                            120,
-                            'start_delay_secs')
+# train_and_evaluate_config
+tf.app.flags.DEFINE_integer('steps_per_eval',
+                            500,
+                            'Controls how often evaluation is carried out!')
 
 FLAGS = tf.app.flags.FLAGS
 args = FLAGS
-PARAMS = args.__dict__
+PARAMS = args.__flags
 
 def make_inp_fn(filename, mode, batch_size):
     
@@ -218,28 +225,24 @@ def make_inp_fn(filename, mode, batch_size):
 
 
 class GeneSaver(tf.estimator.SessionRunHook):
-    def __init__(self, genotype):
-        self.genotype = genotype
-
+    def __init__(self, model, alphas_normal, alphas_reduce):
+        self.model = model
+        self.alphas_normal = alphas_normal
+        self.alphas_reduce = alphas_reduce
+    
     def begin(self):
         self.global_step = tf.train.get_or_create_global_step()
-
+        
     def end(self, session):
-        normal_gene_op = self.genotype.normal
-        reduce_gene_op = self.genotype.reduce
-
+        alphas_normal, alphas_reduce = session.run([self.alphas_normal, self.alphas_reduce])
+        alphas_normal = softmax(alphas_normal)
+        alphas_reduce = softmax(alphas_reduce)
+        
+        genotype = self.model.genotype(alphas_normal, alphas_reduce)        
         self.global_step = session.run(self.global_step)
-        normal_gene = session.run(normal_gene_op)
-        reduce_gene = session.run(reduce_gene_op)
-
-        genotype = Genotype(
-            normal=normal_gene, normal_concat=self.genotype.normal_concat,
-            reduce=reduce_gene, reduce_concat=self.genotype.reduce_concat
-        )
-
+        
         filename = 'final_genotype.{}'.format((self.global_step))
-        tf.logging.info("Saving Genotype for step: {}".format(
-            str(self.global_step)))
+        tf.logging.info("Saving Genotype for step: {}".format(str(self.global_step)))
         utils.write_genotype(genotype, filename)
 
 # model function
@@ -259,7 +262,6 @@ def model_fn(features, labels, mode, params):
     )
     
     lr = tf.maximum(learning_rate, learning_rate_min)
-#     tf.summary.scalar('learning_rate', lr)
     
     optimizer = tf.train.MomentumOptimizer(lr, args.momentum)
     criterion = tf.losses.softmax_cross_entropy
@@ -268,12 +270,12 @@ def model_fn(features, labels, mode, params):
         optimizer = tf.tpu.CrossShardOptimizer(optimizer)
         
     eval_hooks = None
-    
     loss = None
     train_op = None
     eval_metric_ops = None
     prediction_dict = None
     export_outputs = None
+    host_call = None
     # 2. Loss function, training/eval ops
     if mode == tf.estimator.ModeKeys.TRAIN:
         (x_train, x_valid) = features
@@ -300,40 +302,36 @@ def model_fn(features, labels, mode, params):
         y = tf.reshape(tf.cast(y_train, tf.int64), (b, w, h))
         y = tf.one_hot(y, args.num_classes, on_value=1.0, off_value=0.0)
         
-        metric_fn = lambda y, preds: {
-            'miou': tf.metrics.mean_iou(
-                    labels=y,
-                    predictions=tf.round(preds),
-                    num_classes=args.num_classes
-                ),
-        
-            'acc': tf.metrics.accuracy(labels=y, 
-                                      predictions=tf.round(preds))
-        }
-        eval_metric_ops = (metric_fn, [y, preds])
-        
-        host_call = None
-        if(args.use_host_call):
-            def host_call_fn(global_step, learning_rate):
+        if args.use_host_call:
+            def host_call_fn(global_step, learning_rate, loss, y, preds):
                 # Outfeed supports int32 but global_step is expected to be int64.
+                print(loss)
                 global_step = tf.reduce_mean(global_step)
                 global_step = tf.cast(global_step, tf.int64)
-
+                
+                acc = tf.metrics.accuracy(labels=y, 
+                                              predictions=tf.round(preds))
                 with (tf.contrib.summary.create_file_writer(args.model_dir).as_default()):
                     with tf.contrib.summary.always_record_summaries():
                         tf.contrib.summary.scalar(
                             'learning_rate', tf.reduce_mean(learning_rate),
                             step=global_step)
+                        tf.contrib.summary.scalar(
+                            'loss', tf.reduce_mean(loss),step=global_step)
+                        tf.contrib.summary.scalar(
+                            'acc', acc,step=global_step)
                 return tf.contrib.summary.all_summary_ops()
-            
+
             global_step_t = tf.reshape(global_step, [1])
             learning_rate_t = tf.reshape(learning_rate, [1])
+            loss_t = tf.reshape(loss, [1])
             host_call = (host_call_fn,
-                           [global_step_t, learning_rate_t])
+                           [global_step_t, learning_rate_t, loss_t, y, preds])
 
     elif mode == tf.estimator.ModeKeys.EVAL:
-        genotype = model.genotype()
-        gene_saver = GeneSaver(genotype)
+        alphas_normal = model.arch_parameters()[0]
+        alphas_reduce = model.arch_parameters()[1]
+        gene_saver = GeneSaver(model, alphas_normal, alphas_reduce)
         eval_hooks = [gene_saver]
         
         (x_train, x_valid) = features
@@ -353,7 +351,8 @@ def model_fn(features, labels, mode, params):
                 ),
         
             'acc': tf.metrics.accuracy(labels=y, 
-                                      predictions=tf.round(preds))
+                                      predictions=tf.round(preds)),
+#             'loss': loss
         }
         eval_metric_ops = (metric_fn, [y, preds])
         
@@ -403,14 +402,30 @@ def serving_input_fn():
 
 # Create custom estimator's train and evaluate function
 
+def train_and_evaluate(estimator, input_fn):
+    current_step = estimator.latest_checkpoint()
+    if(not current_step):
+        current_step = 0
+    else:
+        current_step = int(estimator.latest_checkpoint().split('-')[-1])
+    tf.logging.info('Training for %d steps. Current step %d.' % (args.max_steps, current_step))
 
-def train_and_evaluate(output_dir, estimator):
-    train_spec = tf.estimator.TrainSpec(input_fn=get_train(),
-                                        max_steps=args.max_steps)
-    exporter = tf.estimator.LatestExporter('exporter', serving_input_fn)
-    eval_spec = tf.estimator.EvalSpec(input_fn=get_train(),
-                                      steps=None, start_delay_secs=args.start_delay_secs, throttle_secs=args.throttle_secs)
-    tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
+    start_timestamp = time.time()
+    while current_step < args.max_steps:
+        next_checkpoint = min(current_step + args.steps_per_eval, args.max_steps)
+        estimator.train(input_fn=input_fn, max_steps=next_checkpoint)
+        current_step = next_checkpoint
+
+        elapsed_time = int(time.time() - start_timestamp)
+        tf.logging.info('Finished training up to step %d. Elapsed seconds %d.' % (current_step, elapsed_time))
+        tf.logging.info('Starting to evaluate.')
+
+        eval_results = estimator.evaluate(
+            input_fn=input_fn,
+            steps= args.num_train_examples // args.eval_batch_size
+        )
+
+        tf.logging.info('Eval results: %s' % eval_results)
 
 def main(argv):
     tpu_cluster_resolver = tf.distribute.cluster_resolver.TPUClusterResolver(
@@ -423,8 +438,8 @@ def main(argv):
       model_dir=args.model_dir,
       save_checkpoints_steps=args.save_checkpoints_steps,
       tpu_config=tf.contrib.tpu.TPUConfig(
-          iterations_per_loop=args.iterations_per_loop,
-          num_shards=args.num_shards))
+          num_shards=args.num_shards,
+          iterations_per_loop=args.iterations_per_loop))
     
     estimator = tf.estimator.tpu.TPUEstimator(
         use_tpu=True,
@@ -436,7 +451,7 @@ def main(argv):
     )
     
     if args.mode == 'train_eval':
-        train_and_evaluate(args.model_dir, estimator)
+        train_and_evaluate(estimator, get_train())
 
     elif args.mode == 'eval':
         # TODO: change input_fn = get_valid()
