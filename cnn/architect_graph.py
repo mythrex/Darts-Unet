@@ -44,7 +44,7 @@ class Architect(object):
         if(self.use_tpu):
             self.optimizer = tf.tpu.CrossShardOptimizer(self.optimizer)
             
-        global_step = tf.train.get_global_step()
+        global_step = tf.train.get_or_create_global_step()
         learning_rate_min = tf.constant(args.learning_rate_min)
 
         learning_rate = tf.train.exponential_decay(
@@ -101,11 +101,13 @@ class Architect(object):
         arch_var = self.model.arch_parameters()
         
         unrolled_model = self.model.new()
-        logits = unrolled_model(x_train)
-        unrolled_train_loss = unrolled_model._loss(logits, y_train)  
+        _ = unrolled_model(x_train)
         unrolled_w_var = self.get_model_theta(unrolled_model)
-        copy_weight_opts = [v.assign(w) for v,w in zip(unrolled_w_var,w_var)]
-        #w'
+        copy_weight_opts = [v.assign(w) for v,w in zip(unrolled_w_var, w_var)]
+        logits = unrolled_model(x_train)
+        
+        unrolled_train_loss = unrolled_model._loss(logits, y_train)  
+
         with tf.control_dependencies(copy_weight_opts):
             unrolled_optimizer = tf.train.GradientDescentOptimizer(lr)
             if(self.use_tpu):
@@ -114,7 +116,6 @@ class Architect(object):
 
         valid_logits = unrolled_model(x_valid)
         valid_loss = unrolled_model._loss(valid_logits, y_valid)
-#         tf.summary.scalar('valid_loss', valid_loss)
 
         with tf.control_dependencies([unrolled_optimizer]):
             valid_grads = tf.gradients(valid_loss, unrolled_w_var)
@@ -123,25 +124,32 @@ class Architect(object):
         R = r / (tf.global_norm(valid_grads)+1e-6)
 
         optimizer_pos=tf.train.GradientDescentOptimizer(R)
+        if(self.use_tpu):
+            optimizer_pos = tf.tpu.CrossShardOptimizer(optimizer_pos)
         optimizer_pos=optimizer_pos.apply_gradients(zip(valid_grads, w_var))
 
         optimizer_neg=tf.train.GradientDescentOptimizer(-2*R)
+        if(self.use_tpu):
+            optimizer_neg = tf.tpu.CrossShardOptimizer(optimizer_neg)
         optimizer_neg=optimizer_neg.apply_gradients(zip(valid_grads, w_var))
 
         optimizer_back=tf.train.GradientDescentOptimizer(R)
+        if(self.use_tpu):
+            optimizer_back = tf.tpu.CrossShardOptimizer(optimizer_back)
         optimizer_back=optimizer_back.apply_gradients(zip(valid_grads, w_var))
-
+        
         with tf.control_dependencies([optimizer_pos]):
             train_grads_pos=tf.gradients(train_loss, arch_var)
             with tf.control_dependencies([optimizer_neg]):
-                train_grads_neg=tf.gradients(train_loss,arch_var)	
+                train_grads_neg=tf.gradients(train_loss,arch_var)
                 with tf.control_dependencies([optimizer_back]):
                     leader_opt= self.optimizer
-                    leader_grads=leader_opt.compute_gradients(valid_loss, var_list =unrolled_model.arch_parameters())
-        for i,(g,v) in enumerate(leader_grads):
-            leader_grads[i]=(g - self.learning_rate * tf.divide(train_grads_pos[i]-train_grads_neg[i],2*R),v)
+                    leader_grads=tf.gradients(valid_loss, unrolled_model.arch_parameters())
+        
+        for i,g in enumerate(leader_grads):
+            leader_grads[i]= g - self.learning_rate * tf.divide(train_grads_pos[i]-train_grads_neg[i],2*R)
 
-        leader_opt=leader_opt.apply_gradients(leader_grads)
+        leader_opt=leader_opt.apply_gradients(zip(leader_grads, arch_var))
         return leader_opt
     
     def _backward_step(self, input_valid, target_valid):

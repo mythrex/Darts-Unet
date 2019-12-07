@@ -20,14 +20,14 @@ class MixedOp(Model):
         super(MixedOp, self).__init__()
         self._ops = []
         for primitive in PRIMITIVES:
-            op = OPS[primitive](C, stride)
-            if 'pool' in primitive:
-                if('avg' in primitive):
-                    op = AvgPool3x3(C, stride)
-                elif('max' in primitive):
-                    op = MaxPool3x3(C, stride)
-            self._ops.append(op)
-
+                op = OPS[primitive](C, stride)
+                if 'pool' in primitive:
+                    if('avg' in primitive):
+                        op = AvgPool3x3(C, stride)
+                    elif('max' in primitive):
+                        op = MaxPool3x3(C, stride)
+                self._ops.append(op)
+        
     def call(self, x, weights):
         """Converts the discrete set of operation into conitnuous mixed operation
 
@@ -38,13 +38,9 @@ class MixedOp(Model):
         Returns:
             tensor: sum of product(weights, operation(x))
         """
-        op_on_x = self._ops[0](x)
-        mask = tf.eye(int(weights.shape[0]), dtype=tf.bool)
-        s = tf.zeros_like(op_on_x)
-        for i in range(len(self._ops)):
-            s += get_tensor_at(weights, mask, i) * self._ops[i](x)
-        return s
-
+        computed_ops = tf.convert_to_tensor([op(x) for op in self._ops])
+        weights = tf.reshape(weights, (weights.shape[0], 1, 1, 1, 1))
+        return tf.reduce_sum(weights * computed_ops, axis=0)
 
 class Cell(Model):
 
@@ -112,7 +108,7 @@ class UpsampleCell(Model):
 
 class Network(Model):
 
-    def __init__(self, C, net_layers, criterion, steps=4, multiplier=4, stem_multiplier=3, num_classes=1):
+    def __init__(self, C, net_layers, criterion, steps=4, multiplier=4, stem_multiplier=3, num_classes=1, scope="network"):
         super(Network, self).__init__()
         self._C = C
         self._criterion = criterion
@@ -120,6 +116,7 @@ class Network(Model):
         self._multiplier = multiplier
         self.net_layers = net_layers
         self.num_classes = num_classes
+        self._scope = scope
         
         C_curr = C*stem_multiplier
 
@@ -173,6 +170,18 @@ class Network(Model):
 
         self._initialize_alphas()
 
+    #     def _initialize_alphas(self):
+    #         k = sum(1 for i in range(self._steps) for n in range(2+i))
+    #         num_ops = len(PRIMITIVES)
+    #         alphas_normal = lambda: 1e-3*tf.random.uniform([k, num_ops])
+    #         alphas_reduce = lambda: 1e-3*tf.random.uniform([k, num_ops])
+
+    #         self.alphas_normal = tf.get_variable(initializer=alphas_normal, name='{}/alphas_normal'.format(self._scope))
+    #         self.alphas_reduce = tf.get_variable(initializer=alphas_reduce, name='{}/alphas_reduce'.format(self._scope))
+    #         self._arch_parameters = [
+    #             self.alphas_normal,
+    #             self.alphas_reduce,
+    #         ]
     def _initialize_alphas(self):
         k = sum(1 for i in range(self._steps) for n in range(2+i))
         num_ops = len(PRIMITIVES)
@@ -191,7 +200,7 @@ class Network(Model):
         return self._arch_parameters
 
     def new(self):
-        model_new = Network(self._C, self.net_layers, self._criterion, num_classes=self.num_classes)
+        model_new = Network(self._C, self.net_layers, self._criterion, num_classes=self.num_classes, scope="new_network")
         for x, y in zip(model_new.arch_parameters(), self.arch_parameters()):
             x.assign(y)
         return model_new
@@ -257,47 +266,6 @@ class Network(Model):
             )
             return genotype
                 
-#     def genotype(self):
-#         def _parse(weights):
-#             with tf.variable_scope("parse"):
-#                 primitives = tf.convert_to_tensor(PRIMITIVES)
-#                 gene = []
-#                 n = 2
-#                 start = 0
-#                 for i in range(self._steps):
-#                     end = start + n
-#                     W = tf.identity(weights[start:end], name="alphas_for_op_strided")
-#                     none_idx = PRIMITIVES.index('none')
-#                     # make none_weight to be -inf
-#                     mask = np.ones(W.shape)
-#                     mask[:, none_idx] = -1
-#                     W = W * tf.convert_to_tensor(mask, dtype=W.dtype)        
-#                     # calc of edges
-#                     W_sorted = tf.sort(W, axis=-1, direction='DESCENDING', name='sorted_weights')
-#                     edges = tf.argsort(W_sorted[:,0], axis=-1, direction='DESCENDING', name='edges')[:2]
-
-#                     for idx in range(edges.shape[0]):
-#                         j = edges[idx]
-#                         j = tf.identity(j, name="selected_op")
-#                         k_best = tf.argsort(W, axis=-1, direction='DESCENDING', name='k_best')[j][0]
-#                         sel_block = primitives[k_best]
-#                         sel_block = tf.identity(sel_block, name="selected_block")
-#                         gene.append((sel_block, j))
-#                     start = end
-#                     n += 1
-#                 return gene
-
-#         gene_normal = _parse(tf.nn.softmax(
-#             self.alphas_normal, axis=-1))
-#         gene_reduce = _parse(tf.nn.softmax(
-#             self.alphas_reduce, axis=-1))
-
-#         concat = range(2+self._steps-self._multiplier, self._steps+2)
-#         genotype = Genotype(
-#             normal=gene_normal, normal_concat=concat,
-#             reduce=gene_reduce, reduce_concat=concat
-#         )
-#         return genotype
 
     def get_thetas(self):
         specific_tensor = []

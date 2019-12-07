@@ -63,7 +63,7 @@ class Architect(object):
             unrolled (bool): True if training we need unrolled
         """
         if unrolled:
-            self._compute_unrolled_step(
+            return self._compute_unrolled_step(
                 input_train,
                 target_train,
                 input_valid,
@@ -72,7 +72,7 @@ class Architect(object):
                 self.learning_rate
             )
         else:
-            self._backward_step(input_valid, target_valid)
+            return self._backward_step(input_valid, target_valid)
 
     def _compute_unrolled_step(self, x_train, y_train, x_valid, y_valid, w_var, lr):
         arch_var = self.model.arch_parameters()
@@ -125,7 +125,8 @@ class Architect(object):
         for i, (g, v) in enumerate(zip(leader_grads, arch_var)):
             leader_grads[i] = (
                 g-lr*tf.divide(train_grads_pos[i]-train_grads_neg[i], 2*R), v)
-        self.optimizer.apply_gradients(leader_grads)
+        step_op = self.optimizer.apply_gradients(leader_grads)
+        return step_op
 
     def _backward_step(self, input_valid, target_valid):
         """Backward step for validation

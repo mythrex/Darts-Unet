@@ -241,7 +241,7 @@ class GeneSaver(tf.estimator.SessionRunHook):
         genotype = self.model.genotype(alphas_normal, alphas_reduce)        
         self.global_step = session.run(self.global_step)
         
-        filename = 'final_genotype.{}'.format((self.global_step))
+        filename = 'final_genotype_{}'.format((self.global_step))
         tf.logging.info("Saving Genotype for step: {}".format(str(self.global_step)))
         utils.write_genotype(genotype, filename)
 
@@ -284,6 +284,7 @@ def model_fn(features, labels, mode, params):
         preds = model(x_train)
         architect = Architect(model, args)
         # architect step
+        tf.logging.info("Computing Architect step!")
         architect_step = architect.step(input_train=x_train,
                                         target_train=y_train,
                                         input_valid=x_valid,
@@ -294,9 +295,10 @@ def model_fn(features, labels, mode, params):
 
         w_var = model.get_thetas()
         loss = model._loss(preds, y_train)
-        grads = tf.gradients(loss, w_var)
-        clipped_gradients, norm = tf.clip_by_global_norm(grads, args.grad_clip)
-        train_op = optimizer.apply_gradients(zip(clipped_gradients, w_var), global_step=tf.train.get_global_step())
+
+        with tf.control_dependencies([architect_step]):
+            tf.logging.info("Computing Model step!")
+            train_op = optimizer.minimize(loss, var_list=w_var, global_step=tf.train.get_global_step())
         
         b, w, h, c = y_train.shape
         y = tf.reshape(tf.cast(y_train, tf.int64), (b, w, h))
@@ -305,7 +307,6 @@ def model_fn(features, labels, mode, params):
         if args.use_host_call:
             def host_call_fn(global_step, learning_rate, loss, y, preds):
                 # Outfeed supports int32 but global_step is expected to be int64.
-                print(loss)
                 global_step = tf.reduce_mean(global_step)
                 global_step = tf.cast(global_step, tf.int64)
                 
@@ -351,8 +352,7 @@ def model_fn(features, labels, mode, params):
                 ),
         
             'acc': tf.metrics.accuracy(labels=y, 
-                                      predictions=tf.round(preds)),
-#             'loss': loss
+                                      predictions=tf.round(preds))
         }
         eval_metric_ops = (metric_fn, [y, preds])
         
@@ -442,11 +442,12 @@ def main(argv):
           iterations_per_loop=args.iterations_per_loop))
     
     estimator = tf.estimator.tpu.TPUEstimator(
-        use_tpu=True,
+        use_tpu=args.use_tpu,
         model_fn=model_fn,
         config=config,
         train_batch_size=args.train_batch_size,
         eval_batch_size=args.eval_batch_size,
+        export_to_tpu=False,
         params=PARAMS
     )
     

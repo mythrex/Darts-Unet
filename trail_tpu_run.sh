@@ -2,7 +2,7 @@
 
 python cnn/train_tpu_estimator.py \
 --max_steps=10000 \
---mode='train_eval' \
+--mode='train' \
 --train_batch_size=16 \
 --eval_batch_size=16 \
 --tpu='unet-darts' \
@@ -13,7 +13,7 @@ python cnn/train_tpu_estimator.py \
 --num_layers=3 \
 --num_shards=8 \
 --steps_per_eval=500 \
---save_checkpoints_steps=250 \
+--save_checkpoints_steps=500 \
 --iterations_per_loop=500 \
 --num_train_examples=1728 \
 --use_host_call=True
