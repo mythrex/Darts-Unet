@@ -43,21 +43,8 @@ class Architect(object):
                                                 beta2=0.999)
         if(self.use_tpu):
             self.optimizer = tf.tpu.CrossShardOptimizer(self.optimizer)
-            
-        global_step = tf.train.get_or_create_global_step()
-        learning_rate_min = tf.constant(args.learning_rate_min)
-
-        learning_rate = tf.train.exponential_decay(
-            args.learning_rate,
-            global_step,
-            decay_rate=args.learning_rate_decay,
-            decay_steps=args.num_batches_per_epoch,
-            staircase=True,
-        )
-
-        lr = tf.maximum(learning_rate, learning_rate_min)
         
-        self.learning_rate = lr
+        self.learning_rate = args.learning_rate
 
     def get_model_theta(self, model):
         specific_tensor = []
@@ -81,10 +68,8 @@ class Architect(object):
             unrolled (bool): True if training we need unrolled
         """
         if unrolled:
-            w_regularization_loss = 0.25
             logits = self.model(input_train)
             train_loss = self.model._loss(logits, target_train)
-            train_loss += 1e4*0.25*w_regularization_loss
             return self._compute_unrolled_step(input_train, 
                                                target_train, 
                                                input_valid, 
@@ -112,7 +97,9 @@ class Architect(object):
             unrolled_optimizer = tf.train.GradientDescentOptimizer(lr)
             if(self.use_tpu):
                 unrolled_optimizer = tf.tpu.CrossShardOptimizer(unrolled_optimizer)
-            unrolled_optimizer = unrolled_optimizer.minimize(unrolled_train_loss, var_list=unrolled_w_var)
+            update_ops1 = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            with tf.control_dependencies(update_ops1):
+                unrolled_optimizer = unrolled_optimizer.minimize(unrolled_train_loss, var_list=unrolled_w_var)
 
         valid_logits = unrolled_model(x_valid)
         valid_loss = unrolled_model._loss(valid_logits, y_valid)
@@ -126,17 +113,23 @@ class Architect(object):
         optimizer_pos=tf.train.GradientDescentOptimizer(R)
         if(self.use_tpu):
             optimizer_pos = tf.tpu.CrossShardOptimizer(optimizer_pos)
-        optimizer_pos=optimizer_pos.apply_gradients(zip(valid_grads, w_var))
+        update_ops2 = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(update_ops2):
+            optimizer_pos=optimizer_pos.apply_gradients(zip(valid_grads, w_var))
 
         optimizer_neg=tf.train.GradientDescentOptimizer(-2*R)
         if(self.use_tpu):
             optimizer_neg = tf.tpu.CrossShardOptimizer(optimizer_neg)
-        optimizer_neg=optimizer_neg.apply_gradients(zip(valid_grads, w_var))
+        update_ops3 = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(update_ops3):
+            optimizer_neg=optimizer_neg.apply_gradients(zip(valid_grads, w_var))
 
         optimizer_back=tf.train.GradientDescentOptimizer(R)
         if(self.use_tpu):
             optimizer_back = tf.tpu.CrossShardOptimizer(optimizer_back)
-        optimizer_back=optimizer_back.apply_gradients(zip(valid_grads, w_var))
+        update_ops4 = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(update_ops4):
+            optimizer_back=optimizer_back.apply_gradients(zip(valid_grads, w_var))
         
         with tf.control_dependencies([optimizer_pos]):
             train_grads_pos=tf.gradients(train_loss, arch_var)
@@ -148,8 +141,9 @@ class Architect(object):
         
         for i,g in enumerate(leader_grads):
             leader_grads[i]= g - self.learning_rate * tf.divide(train_grads_pos[i]-train_grads_neg[i],2*R)
-
-        leader_opt=leader_opt.apply_gradients(zip(leader_grads, arch_var))
+        update_ops5 = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(update_ops5):
+            leader_opt=leader_opt.apply_gradients(zip(leader_grads, arch_var))
         return leader_opt
     
     def _backward_step(self, input_valid, target_valid):
@@ -160,5 +154,7 @@ class Architect(object):
             target_train (tensor): a train of targets
         """
         loss = self.model._loss(self.model(input_valid), target_valid)
-        opt = self.optimizer.minimize(loss, var_list=model.get_weights())
+        update_ops1 = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(update_ops1):
+            opt = self.optimizer.minimize(loss, var_list=model.get_weights())
         return opt

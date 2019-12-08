@@ -170,31 +170,31 @@ class Network(Model):
 
         self._initialize_alphas()
 
-    #     def _initialize_alphas(self):
-    #         k = sum(1 for i in range(self._steps) for n in range(2+i))
-    #         num_ops = len(PRIMITIVES)
-    #         alphas_normal = lambda: 1e-3*tf.random.uniform([k, num_ops])
-    #         alphas_reduce = lambda: 1e-3*tf.random.uniform([k, num_ops])
-
-    #         self.alphas_normal = tf.get_variable(initializer=alphas_normal, name='{}/alphas_normal'.format(self._scope))
-    #         self.alphas_reduce = tf.get_variable(initializer=alphas_reduce, name='{}/alphas_reduce'.format(self._scope))
-    #         self._arch_parameters = [
-    #             self.alphas_normal,
-    #             self.alphas_reduce,
-    #         ]
     def _initialize_alphas(self):
         k = sum(1 for i in range(self._steps) for n in range(2+i))
         num_ops = len(PRIMITIVES)
         alphas_normal = lambda: 1e-3*tf.random.uniform([k, num_ops])
         alphas_reduce = lambda: 1e-3*tf.random.uniform([k, num_ops])
-        self.alphas_normal = tf.Variable(
-            alphas_normal, name='alphas_normal')
-        self.alphas_reduce = tf.Variable(
-            alphas_reduce, name='alphas_reduce')
+
+        self.alphas_normal = tf.get_variable(initializer=alphas_normal, name='{}/alphas_normal'.format(self._scope))
+        self.alphas_reduce = tf.get_variable(initializer=alphas_reduce, name='{}/alphas_reduce'.format(self._scope))
         self._arch_parameters = [
             self.alphas_normal,
             self.alphas_reduce,
         ]
+    #     def _initialize_alphas(self):
+    #         k = sum(1 for i in range(self._steps) for n in range(2+i))
+    #         num_ops = len(PRIMITIVES)
+    #         alphas_normal = lambda: 1e-3*tf.random.uniform([k, num_ops])
+    #         alphas_reduce = lambda: 1e-3*tf.random.uniform([k, num_ops])
+    #         self.alphas_normal = tf.Variable(
+    #             alphas_normal, name='alphas_normal')
+    #         self.alphas_reduce = tf.Variable(
+    #             alphas_reduce, name='alphas_reduce')
+    #         self._arch_parameters = [
+    #             self.alphas_normal,
+    #             self.alphas_reduce,
+    #         ]
 
     def arch_parameters(self):
         return self._arch_parameters
