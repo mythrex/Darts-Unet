@@ -41,6 +41,7 @@ class Architect(object):
         self.optimizer = tf.train.AdamOptimizer(learning_rate=self.arch_learning_rate,
                                                 beta1=0.5,
                                                 beta2=0.999)
+        self.use_bfloat = args.use_bfloat
         if(self.use_tpu):
             self.optimizer = tf.tpu.CrossShardOptimizer(self.optimizer)
         
@@ -105,42 +106,51 @@ class Architect(object):
         valid_loss = unrolled_model._loss(valid_logits, y_valid)
 
         with tf.control_dependencies([unrolled_optimizer]):
-            valid_grads = tf.gradients(valid_loss, unrolled_w_var)
-
+            valid_grads = self.optimizer.compute_gradients(valid_loss, var_list=unrolled_w_var)
+            valid_grads = list(map(lambda x: x[0], valid_grads))
+            
         r=1e-2
-        R = r / (tf.global_norm(valid_grads)+1e-6)
+        smoothy = 1e-6
+        if(self.use_bfloat):
+            R = 1e-10
+        else:
+            R = r / (tf.linalg.global_norm(valid_grads)+ smoothy)
 
         optimizer_pos=tf.train.GradientDescentOptimizer(R)
         if(self.use_tpu):
             optimizer_pos = tf.tpu.CrossShardOptimizer(optimizer_pos)
         update_ops2 = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops2):
-            optimizer_pos=optimizer_pos.apply_gradients(zip(valid_grads, w_var))
+            optimizer_pos_op=optimizer_pos.apply_gradients(zip(valid_grads, w_var))
 
         optimizer_neg=tf.train.GradientDescentOptimizer(-2*R)
         if(self.use_tpu):
             optimizer_neg = tf.tpu.CrossShardOptimizer(optimizer_neg)
         update_ops3 = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops3):
-            optimizer_neg=optimizer_neg.apply_gradients(zip(valid_grads, w_var))
+            optimizer_neg_op=optimizer_neg.apply_gradients(zip(valid_grads, w_var))
 
         optimizer_back=tf.train.GradientDescentOptimizer(R)
         if(self.use_tpu):
             optimizer_back = tf.tpu.CrossShardOptimizer(optimizer_back)
         update_ops4 = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops4):
-            optimizer_back=optimizer_back.apply_gradients(zip(valid_grads, w_var))
+            optimizer_back_op=optimizer_back.apply_gradients(zip(valid_grads, w_var))
         
-        with tf.control_dependencies([optimizer_pos]):
-            train_grads_pos=tf.gradients(train_loss, arch_var)
-            with tf.control_dependencies([optimizer_neg]):
-                train_grads_neg=tf.gradients(train_loss,arch_var)
-                with tf.control_dependencies([optimizer_back]):
+        with tf.control_dependencies([optimizer_pos_op]):
+            train_grads_pos= optimizer_pos.compute_gradients(train_loss, var_list=arch_var)
+            train_grads_pos = list(map(lambda x: x[0], train_grads_pos))
+            print(train_grads_pos)
+            with tf.control_dependencies([optimizer_neg_op]):
+                train_grads_neg=optimizer_neg.compute_gradients(train_loss,  var_list=arch_var)
+                train_grads_neg = list(map(lambda x: x[0], train_grads_neg))
+                with tf.control_dependencies([optimizer_back_op]):
                     leader_opt= self.optimizer
-                    leader_grads=tf.gradients(valid_loss, unrolled_model.arch_parameters())
+                    leader_grads=self.optimizer.compute_gradients(valid_loss, var_list=unrolled_model.arch_parameters())
+                    leader_grads = list(map(lambda x: x[0], leader_grads))
         
         for i,g in enumerate(leader_grads):
-            leader_grads[i]= g - self.learning_rate * tf.divide(train_grads_pos[i]-train_grads_neg[i],2*R)
+            leader_grads[i] = g - self.learning_rate * tf.divide(train_grads_pos[i]-train_grads_neg[i],2*R)
         update_ops5 = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops5):
             leader_opt=leader_opt.apply_gradients(zip(leader_grads, arch_var))

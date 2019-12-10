@@ -56,10 +56,6 @@ tf.app.flags.DEFINE_float('learning_rate_min',
                           0.0001,
                           'Minimum LR')
 
-tf.app.flags.DEFINE_integer('num_batches_per_epoch',
-                            2000,
-                            'Number of examples per epoch (i.e. num_examples / batch_size)')
-
 tf.app.flags.DEFINE_bool('unrolled',
                          True,
                          'if arch search enabled')
@@ -77,7 +73,7 @@ tf.app.flags.DEFINE_integer('num_classes',
                             'No of classes')
 
 tf.app.flags.DEFINE_list('crop_size',
-                         [128, 128],
+                         [64, 64],
                          'image size fed to network')
 
 
@@ -150,6 +146,11 @@ tf.app.flags.DEFINE_integer(
           ' --iterations_per_loop. The larger this value is, the higher the'
           ' utilization on the TPU.'))
 
+tf.app.flags.DEFINE_bool('use_bfloat',
+                         False,
+                         'if to use bfloat for model')
+
+
 # train_and_evaluate_config
 tf.app.flags.DEFINE_integer('steps_per_eval',
                             500,
@@ -189,14 +190,9 @@ def make_inp_fn(filename, mode, batch_size):
             valid_x = tf.image.decode_png(valid_x, channels=3)
             valid_y = tf.image.decode_png(valid_y, channels=3)
             
-            
-            train_x = tf.cast(train_x, tf.float32)
             train_x = tf.image.resize(train_x, (W, H))
-            train_y = tf.cast(train_y, tf.float32)
             train_y = tf.image.resize(train_y, (W, H))
-            valid_x = tf.cast(valid_x, tf.float32)
             valid_x = tf.image.resize(valid_x, (W, H))
-            valid_y = tf.cast(valid_y, tf.float32)
             valid_y = tf.image.resize(valid_y, (W, H))
             
             train_y = train_y[:, :, 0]
@@ -205,6 +201,17 @@ def make_inp_fn(filename, mode, batch_size):
             valid_y = valid_y[:, :, 0]
             valid_y = tf.expand_dims(valid_y, axis=-1)
             
+            if(args.use_bfloat):
+                train_x = tf.cast(train_x, tf.bfloat16)
+                train_y = tf.cast(train_y, tf.bfloat16)
+                valid_x = tf.cast(valid_x, tf.bfloat16)
+                valid_y = tf.cast(valid_y, tf.bfloat16)
+            else:
+                train_x = tf.cast(train_x, tf.float32)
+                train_y = tf.cast(train_y, tf.float32)
+                valid_x = tf.cast(valid_x, tf.float32)
+                valid_y = tf.cast(valid_y, tf.float32)
+                
             return ((train_x, valid_x), (train_y, valid_y))
 
         dataset = image_dataset.map(_parse_image_function)
@@ -246,29 +253,16 @@ class GeneSaver(tf.estimator.SessionRunHook):
         utils.write_genotype(genotype, filename)
 
 # model function
+def one_hot_encode(x):
+    b, w, h, c = x.shape
+    y = tf.reshape(tf.cast(x, tf.int64), (b, w, h))
+    y = tf.one_hot(y, args.num_classes, on_value=1.0, off_value=0.0)
+    return y
 
 def model_fn(features, labels, mode, params):
     criterion = tf.losses.softmax_cross_entropy
     model = Network(C=args.init_channels, net_layers=args.num_layers, criterion=criterion, num_classes=args.num_classes)
-    global_step = tf.train.get_global_step()
-    learning_rate_min = tf.constant(args.learning_rate_min)
     
-    learning_rate = tf.train.exponential_decay(
-        args.learning_rate,
-        global_step,
-        decay_rate=args.learning_rate_decay,
-        decay_steps=args.num_batches_per_epoch,
-        staircase=True,
-    )
-    
-    lr = tf.maximum(learning_rate, learning_rate_min)
-    
-    optimizer = tf.train.MomentumOptimizer(lr, args.momentum)
-    criterion = tf.losses.softmax_cross_entropy
-    
-    if(args.use_tpu):
-        optimizer = tf.tpu.CrossShardOptimizer(optimizer)
-        
     eval_hooks = None
     loss = None
     train_op = None
@@ -280,6 +274,22 @@ def model_fn(features, labels, mode, params):
     if mode == tf.estimator.ModeKeys.TRAIN:
         (x_train, x_valid) = features
         (y_train, y_valid) = labels
+        global_step = tf.train.get_global_step()
+        learning_rate_min = tf.constant(args.learning_rate_min)
+        num_batches_per_epoch = args.num_train_examples // args.train_batch_size
+        learning_rate = tf.train.exponential_decay(
+            args.learning_rate,
+            global_step,
+            decay_rate=args.learning_rate_decay,
+            decay_steps=num_batches_per_epoch,
+            staircase=False,
+        )
+        lr = tf.maximum(learning_rate, learning_rate_min)
+        optimizer = tf.train.MomentumOptimizer(lr, args.momentum)
+
+        if(args.use_tpu):
+            optimizer = tf.tpu.CrossShardOptimizer(optimizer)
+
 
         preds = model(x_train)
         architect = Architect(model, args)
@@ -297,21 +307,18 @@ def model_fn(features, labels, mode, params):
         loss = model._loss(preds, y_train)
 
         with tf.control_dependencies([architect_step]):
-            tf.logging.info("Computing Model step!")
-            train_op = optimizer.minimize(loss, var_list=w_var, global_step=tf.train.get_global_step())
+            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            with tf.control_dependencies(update_ops):
+                train_op = optimizer.minimize(loss, var_list=w_var, global_step=global_step)
         
-        b, w, h, c = y_train.shape
-        y = tf.reshape(tf.cast(y_train, tf.int64), (b, w, h))
-        y = tf.one_hot(y, args.num_classes, on_value=1.0, off_value=0.0)
         
         if args.use_host_call:
-            def host_call_fn(global_step, learning_rate, loss, y, preds):
+            def host_call_fn(global_step, learning_rate, loss):
                 # Outfeed supports int32 but global_step is expected to be int64.
                 global_step = tf.reduce_mean(global_step)
                 global_step = tf.cast(global_step, tf.int64)
+
                 
-                acc = tf.metrics.accuracy(labels=y, 
-                                              predictions=tf.round(preds))
                 with (tf.contrib.summary.create_file_writer(args.model_dir).as_default()):
                     with tf.contrib.summary.always_record_summaries():
                         tf.contrib.summary.scalar(
@@ -319,15 +326,13 @@ def model_fn(features, labels, mode, params):
                             step=global_step)
                         tf.contrib.summary.scalar(
                             'loss', tf.reduce_mean(loss),step=global_step)
-                        tf.contrib.summary.scalar(
-                            'acc', acc,step=global_step)
                 return tf.contrib.summary.all_summary_ops()
 
             global_step_t = tf.reshape(global_step, [1])
             learning_rate_t = tf.reshape(learning_rate, [1])
             loss_t = tf.reshape(loss, [1])
             host_call = (host_call_fn,
-                           [global_step_t, learning_rate_t, loss_t, y, preds])
+                           [global_step_t, learning_rate_t, loss_t])
 
     elif mode == tf.estimator.ModeKeys.EVAL:
         alphas_normal = model.arch_parameters()[0]
@@ -339,20 +344,16 @@ def model_fn(features, labels, mode, params):
         (y_train, y_valid) = labels
         preds = model(x_valid)
         loss = model._loss(preds, y_valid)
-        
-        b, w, h, c = y_valid.shape
-        y = tf.reshape(tf.cast(y_valid, tf.int64), (b, w, h))
-        y = tf.one_hot(y, args.num_classes, on_value=1.0, off_value=0.0)
-        
+        y = one_hot_encode(y_valid)
+
         metric_fn = lambda y, preds: {
             'miou': tf.metrics.mean_iou(
                     labels=y,
-                    predictions=tf.round(preds),
+                    predictions=one_hot_encode(tf.expand_dims(tf.argmax(preds, axis=-1), axis=-1)),
                     num_classes=args.num_classes
                 ),
-        
             'acc': tf.metrics.accuracy(labels=y, 
-                                      predictions=tf.round(preds))
+                                      predictions=one_hot_encode(tf.expand_dims(tf.argmax(preds, axis=-1), axis=-1)))
         }
         eval_metric_ops = (metric_fn, [y, preds])
         
@@ -434,12 +435,13 @@ def main(argv):
       project=args.project)
     
     config = tf.estimator.tpu.RunConfig(
-      cluster=tpu_cluster_resolver,
-      model_dir=args.model_dir,
-      save_checkpoints_steps=args.save_checkpoints_steps,
-      tpu_config=tf.contrib.tpu.TPUConfig(
+        cluster=tpu_cluster_resolver,
+        model_dir=args.model_dir,
+        save_checkpoints_steps=args.save_checkpoints_steps,
+        tpu_config=tf.contrib.tpu.TPUConfig(
           num_shards=args.num_shards,
-          iterations_per_loop=args.iterations_per_loop))
+          iterations_per_loop=args.iterations_per_loop),
+        tf_random_seed=int(args.seed))
     
     estimator = tf.estimator.tpu.TPUEstimator(
         use_tpu=args.use_tpu,
@@ -456,7 +458,11 @@ def main(argv):
 
     elif args.mode == 'eval':
         # TODO: change input_fn = get_valid()
-        estimator.evaluate(input_fn=get_train(), steps=args.steps)
+        if(args.steps):
+            estimator.evaluate(input_fn=get_train(), steps=args.steps)
+        else:
+            steps = args.num_train_examples // args.eval_batch_size
+            estimator.evaluate(input_fn=get_train(), steps=steps)
     elif args.mode == 'train':
         steps = args.steps
         max_steps = None

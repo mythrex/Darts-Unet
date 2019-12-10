@@ -6,6 +6,7 @@ from operations import *
 import numpy as np
 from utils import get_tensor_at
 
+USE_BFLOAT = False
 
 class MixedOp(Model):
     """Makes mixed operations object
@@ -40,6 +41,9 @@ class MixedOp(Model):
         """
         computed_ops = tf.convert_to_tensor([op(x) for op in self._ops])
         weights = tf.reshape(weights, (weights.shape[0], 1, 1, 1, 1))
+        if(USE_BFLOAT):
+            computed_ops = tf.cast(computed_ops, dtype=tf.bfloat16, name='computed_ops_to_bfloat16')
+            weights = tf.cast(computed_ops, dtype=tf.bfloat16, name='weights_to_bfloat16')
         return tf.reduce_sum(weights * computed_ops, axis=0)
 
 class Cell(Model):
@@ -175,6 +179,9 @@ class Network(Model):
         num_ops = len(PRIMITIVES)
         alphas_normal = lambda: 1e-3*tf.random.uniform([k, num_ops])
         alphas_reduce = lambda: 1e-3*tf.random.uniform([k, num_ops])
+        if(USE_BFLOAT):
+            alphas_normal = lambda: 1e-3*tf.random.uniform([k, num_ops], dtype=tf.bfloat16)
+            alphas_reduce = lambda: 1e-3*tf.random.uniform([k, num_ops], dtype=tf.bfloat16)
 
         self.alphas_normal = tf.get_variable(initializer=alphas_normal, name='{}/alphas_normal'.format(self._scope))
         self.alphas_reduce = tf.get_variable(initializer=alphas_reduce, name='{}/alphas_reduce'.format(self._scope))

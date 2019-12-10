@@ -102,6 +102,7 @@ tf.app.flags.DEFINE_integer('throttle_secs',
                             200,
                             'Minimum Secs to wait before performing eval.')
 
+
 tf.app.flags.DEFINE_string('model_dir',
                            './outputdir',
                            'Model Events and checkpoint folder.')
@@ -115,77 +116,69 @@ tf.app.flags.DEFINE_enum('mode',
                          ['train_eval', 'eval', 'train'],
 			 'mode=train/eval/train_eval')
 
+tf.app.flags.DEFINE_bool('use_tpu',
+                         False,
+                         'If to use tpu')
+
 
 def make_inp_fn(filename, mode, batch_size):
-    def _input_fn():
+    
+    def _input_fn(params):
         image_dataset = tf.data.TFRecordDataset(filename)
-        W, H = 16, 16
+        W, H = args.crop_size[0], args.crop_size[1]
 
-        # Create a dictionary describing the features.
+        # Create a dictionary describing the features.  
         image_feature_description = {
-            'name': tf.FixedLenFeature([], tf.string),
-            'label_encoded': tf.FixedLenFeature([], tf.string),
-            'encoded': tf.FixedLenFeature([], tf.string)
+            'train_name': tf.FixedLenFeature([], tf.string),  
+            'train_x': tf.FixedLenFeature([], tf.string),
+            'train_y': tf.FixedLenFeature([], tf.string),
+            'valid_name': tf.FixedLenFeature([], tf.string),  
+            'valid_x': tf.FixedLenFeature([], tf.string),
+            'valid_y': tf.FixedLenFeature([], tf.string)
         }
-
         def _parse_image_function(example_proto):
             # Parse the input tf.Example proto using the dictionary above.
-            feature = tf.parse_single_example(
-                example_proto, image_feature_description)
-            image = feature['encoded']
-            label = feature['label_encoded']
-            name = feature['name']
+            feature= tf.parse_single_example(example_proto, image_feature_description)
+            train_x = feature['train_x']
+            train_y = feature['train_y']
+            valid_x = feature['valid_x']
+            valid_y = feature['valid_y']
+            train_name = feature['train_name']
+            valid_name = feature['valid_name']
 
-            image = tf.image.decode_png(image, channels=3)
-            label = tf.image.decode_png(label, channels=3)
-
-            image = tf.cast(image, tf.float32)
-            image = tf.image.resize(image, (W, H))
-            label = tf.cast(label, tf.float32)
-            label = tf.image.resize(label, (W, H))
-
-            return image, label
+            train_x = tf.image.decode_png(train_x, channels=3)
+            train_y = tf.image.decode_png(train_y, channels=3)
+            valid_x = tf.image.decode_png(valid_x, channels=3)
+            valid_y = tf.image.decode_png(valid_y, channels=3)
+            
+            
+            train_x = tf.cast(train_x, tf.float32)
+            train_x = tf.image.resize(train_x, (W, H))
+            train_y = tf.cast(train_y, tf.float32)
+            train_y = tf.image.resize(train_y, (W, H))
+            valid_x = tf.cast(valid_x, tf.float32)
+            valid_x = tf.image.resize(valid_x, (W, H))
+            valid_y = tf.cast(valid_y, tf.float32)
+            valid_y = tf.image.resize(valid_y, (W, H))
+            
+            train_y = train_y[:, :, 0]
+            train_y = tf.expand_dims(train_y, axis=-1)
+            
+            valid_y = valid_y[:, :, 0]
+            valid_y = tf.expand_dims(valid_y, axis=-1)
+            
+            return ((train_x, valid_x), (train_y, valid_y))
 
         dataset = image_dataset.map(_parse_image_function)
-
+        
         if mode == tf.estimator.ModeKeys.TRAIN:
-            num_epochs = None  # indefinitely
-            dataset = dataset.shuffle(buffer_size=10 * batch_size)
-        else:
-            num_epochs = 1  # end-of-input after this
-
-        dataset = dataset.repeat(num_epochs).batch(batch_size)
-
-        return dataset
-
-    return _input_fn
-
-# dummy input function
-
-
-def make_inp_fn2(filename, mode, batch_size):
-    def _input_fn():
-        W, H = args.crop_size[0], args.crop_size[1]
-        NUM_IMAGES = 20
-        if mode == tf.estimator.ModeKeys.TRAIN or mode == tf.estimator.ModeKeys.EVAL:
-            x_train = np.random.randint(0, 256, (NUM_IMAGES // batch_size, batch_size, W, H, args.init_channels)).astype(np.float32)
-            y_train = np.random.randint(0, args.num_classes, (NUM_IMAGES // batch_size, batch_size, W, H, 1)).astype(np.float32)
-            x_valid = np.random.randint(0, 256, (NUM_IMAGES // batch_size, batch_size, W, H, args.init_channels)).astype(np.float32)
-            y_valid = np.random.randint(0, args.num_classes, (NUM_IMAGES // batch_size, batch_size, W, H, 1)).astype(np.float32)
-            
-            ds = (x_train, x_valid), (y_train, y_valid)
-            dataset = tf.data.Dataset.from_tensor_slices(ds)
             num_epochs = None # indefinitely
             dataset = dataset.shuffle(buffer_size = 10 * batch_size)
         else:
-            x_train = np.random.randint(0, 256, (NUM_IMAGES, W, H, 3)).astype(np.float32)
-            y_train = np.random.randint(0, 6, (NUM_IMAGES, W, H, 1)).astype(np.float32)
-            
-            ds = (x_train, y_train)
-            dataset = tf.data.Dataset.from_tensor_slices(ds)
             num_epochs = 1 # end-of-input after this
-#         w, h, c = dataset.shape
-        dataset = dataset.repeat(num_epochs)
+
+        dataset = dataset.repeat(num_epochs).batch(batch_size,  drop_remainder=True)
+
         return dataset
     
     return _input_fn
@@ -194,56 +187,49 @@ def make_inp_fn2(filename, mode, batch_size):
 
 
 class GeneSaver(tf.estimator.SessionRunHook):
-    def __init__(self, genotype):
-        self.genotype = genotype
-
+    def __init__(self, model, alphas_normal, alphas_reduce):
+        self.model = model
+        self.alphas_normal = tf.nn.softmax(alphas_normal, axis=-1)
+        self.alphas_reduce = tf.nn.softmax(alphas_reduce, axis=-1)
+    
     def begin(self):
         self.global_step = tf.train.get_or_create_global_step()
-
+        
     def end(self, session):
-        normal_gene_op = self.genotype.normal
-        reduce_gene_op = self.genotype.reduce
-
+        alphas_normal, alphas_reduce = session.run([self.alphas_normal, self.alphas_reduce])
+        alphas_normal = alphas_normal
+        alphas_reduce = alphas_reduce
+        
+        genotype = self.model.genotype(alphas_normal, alphas_reduce)        
         self.global_step = session.run(self.global_step)
-        normal_gene = session.run(normal_gene_op)
-        reduce_gene = session.run(reduce_gene_op)
-
-        genotype = Genotype(
-            normal=normal_gene, normal_concat=self.genotype.normal_concat,
-            reduce=reduce_gene, reduce_concat=self.genotype.reduce_concat
-        )
-
+        
         filename = 'final_genotype.{}'.format((self.global_step))
-        tf.logging.info("Saving Genotype for step: {}".format(
-            str(self.global_step)))
+        tf.logging.info("Saving Genotype for step: {}".format(str(self.global_step)))
         utils.write_genotype(genotype, filename)
 
 # model function
-
-
 def model_fn(features, labels, mode):
-    criterion = tf.losses.sigmoid_cross_entropy
-    model = Network(C=args.init_channels,
-                    net_layers=args.num_layers, criterion=criterion, num_classes=args.num_classes)
+    criterion = tf.losses.softmax_cross_entropy
+    model = Network(C=args.init_channels, net_layers=args.num_layers, criterion=criterion, num_classes=args.num_classes)
+    
     global_step = tf.train.get_global_step()
     learning_rate_min = tf.constant(args.learning_rate_min)
-
+    
     learning_rate = tf.train.exponential_decay(
         args.learning_rate,
         global_step,
         decay_rate=args.learning_rate_decay,
         decay_steps=args.num_batches_per_epoch,
-        staircase=True,
+        staircase=False,
     )
-
+    
     lr = tf.maximum(learning_rate, learning_rate_min)
-    tf.summary.scalar('learning_rate', lr)
-
+    
     optimizer = tf.train.MomentumOptimizer(lr, args.momentum)
     criterion = tf.losses.sigmoid_cross_entropy
-
+    
     eval_hooks = None
-
+    
     loss = None
     train_op = None
     eval_metric_ops = None
@@ -256,74 +242,67 @@ def model_fn(features, labels, mode):
 
         preds = model(x_train)
         architect = Architect(model, args)
-        # architect step
         architect_step = architect.step(input_train=x_train,
-                                        target_train=y_train,
-                                        input_valid=x_valid,
-                                        target_valid=y_valid,
-                                        unrolled=args.unrolled,
-                                        )
+                                       target_train=y_train,
+                                       input_valid=x_valid,
+                                       target_valid=y_valid,
+                                       unrolled=args.unrolled,
+                                       )
 
-        w_var = model.get_thetas()
-        loss = model._loss(preds, y_train)
-        grads = tf.gradients(loss, w_var)
-        clipped_gradients, norm = tf.clip_by_global_norm(grads, args.grad_clip)
-        train_op = optimizer.apply_gradients(
-            zip(clipped_gradients, w_var), global_step=tf.train.get_global_step())
 
-        miou = tf.metrics.mean_iou(
-            labels=y_train,
-            predictions=preds,
-            num_classes=args.num_classes
-        )
-        acc = tf.metrics.accuracy(labels=y_train,
-                                  predictions=preds)
-        eval_metric_ops = {
-            "miou": miou,
-            "accuracy": acc
-        }
+        with tf.control_dependencies([architect_step]):
+            w_var = model.get_thetas()
+            loss = model._loss(preds, y_train)
+            grads = tf.gradients(loss, w_var)
+            train_op = optimizer.apply_gradients(zip(grads, w_var), global_step=tf.train.get_global_step())
 
+        
+        tf.summary.scalar('learning_rate', lr)
+        
+    
     elif mode == tf.estimator.ModeKeys.EVAL:
-        genotype = model.genotype()
-        gene_saver = GeneSaver(genotype)
+        alphas_normal = model.arch_parameters()[0]
+        alphas_reduce = model.arch_parameters()[1]
+        gene_saver = GeneSaver(model, alphas_normal, alphas_reduce)
         eval_hooks = [gene_saver]
-
+        
         (x_train, x_valid) = features
         (y_train, y_valid) = labels
-        
         preds = model(x_valid)
-        print("##############")
-        print(preds)
-        print(y_valid)
-        
         loss = model._loss(preds, y_valid)
+        
+        b, w, h, c = y_valid.shape
+        y = tf.reshape(tf.cast(y_valid, tf.int64), (b, w, h))
+        y = tf.one_hot(y, args.num_classes, on_value=1.0, off_value=0.0)
+        
         miou = tf.metrics.mean_iou(
-            labels=y_valid,
-            predictions=preds,
-            num_classes=args.num_classes
-        )
-        acc = tf.metrics.accuracy(labels=y_valid, predictions=preds)
+                    labels=y,
+                    predictions=preds,
+                    num_classes=args.num_classes
+                )
+        acc = tf.metrics.accuracy(labels=y_valid, 
+                                  predictions=tf.expand_dims(tf.argmax(preds, axis=-1), axis=-1))
+        
         eval_metric_ops = {
             "miou": miou,
             "accuracy": acc
         }
-
+        
     elif mode == tf.estimator.ModeKeys.PREDICT:
         x = features
         y = labels
         preds = model(x)
         prediction_dict = {"predictions": preds}
-        export_outputs = {
-            "predict_export_outputs": tf.estimator.export.PredictOutput(outputs=preds)}
-
+        export_outputs = {"predict_export_outputs": tf.estimator.export.PredictOutput(outputs = preds)}
+    
     # 5. Return EstimatorSpec
     return tf.estimator.EstimatorSpec(
-        mode=mode,
-        predictions=prediction_dict,
-        loss=loss,
-        train_op=train_op,
-        eval_metric_ops=eval_metric_ops,
-        export_outputs=export_outputs,
+        mode = mode,
+        predictions = prediction_dict,
+        loss = loss,
+        train_op = train_op,
+        eval_metric_ops = eval_metric_ops,
+        export_outputs = export_outputs,
         evaluation_hooks=eval_hooks
     )
 
@@ -332,8 +311,7 @@ def model_fn(features, labels, mode):
 
 
 def get_train():
-    # ! TODO: change make_inp_fn2 to make_inp_fn
-    return make_inp_fn2(filename=os.path.join(args.data, 'infer/infer-00000-00007.tfrecords'),
+    return make_inp_fn(filename=tf.gfile.Glob(os.path.join(args.data, 'train-search-*-00008.tfrecords')),
                         mode=tf.estimator.ModeKeys.TRAIN,
                         batch_size=args.batch_size)
 
@@ -358,11 +336,7 @@ def serving_input_fn():
 # Create custom estimator's train and evaluate function
 
 
-def train_and_evaluate(output_dir):
-    config = tf.estimator.RunConfig(save_checkpoints_steps=args.save_checkpoints_steps,
-                                    model_dir=args.model_dir)
-    estimator = tf.estimator.Estimator(model_fn=model_fn,
-                                       config=config)
+def train_and_evaluate(output_dir, estimator):
     train_spec = tf.estimator.TrainSpec(input_fn=get_train(),
                                         max_steps=args.max_steps)
     exporter = tf.estimator.LatestExporter('exporter', serving_input_fn)
@@ -372,25 +346,21 @@ def train_and_evaluate(output_dir):
 
 
 def main(argv):
+    config = tf.estimator.RunConfig(save_checkpoints_steps=args.save_checkpoints_steps,
+                                model_dir=args.model_dir, tf_random_seed=int(args.seed))
+    estimator = tf.estimator.Estimator(model_fn = model_fn, 
+                     config=config)
     if args.mode == 'train_eval':
-        train_and_evaluate(args.model_dir)
+        train_and_evaluate(args.model_dir, estimator)
 
     elif args.mode == 'eval':
-        config = tf.estimator.RunConfig(save_checkpoints_steps=args.save_checkpoints_steps,
-                                        model_dir=args.model_dir)
-        estimator = tf.estimator.Estimator(model_fn=model_fn,
-                                           config=config)
         # TODO: change input_fn = get_valid()
-        estimator.evaluate(input_fn=get_train(), steps=args.steps)
+        estimator.evaluate(input_fn=get_train(), steps=None)
     elif args.mode == 'train':
         steps = args.steps
         max_steps = None
         if steps == None:
             max_steps = args.max_steps
-        config = tf.estimator.RunConfig(save_checkpoints_steps=args.save_checkpoints_steps,
-                                        model_dir=args.model_dir)
-        estimator = tf.estimator.Estimator(model_fn=model_fn,
-                                           config=config)
         estimator.train(input_fn=get_train(), max_steps=max_steps, steps=steps)
     else:
         raise NotImplementedError(
@@ -399,6 +369,5 @@ def main(argv):
 
 if __name__ == "__main__":
     # set random seeds
-    tf.random.set_seed(args.seed)
-    np.random.seed(args.seed)
+    np.random.seed(int(args.seed))
     tf.app.run(main=main)
