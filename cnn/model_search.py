@@ -1,5 +1,5 @@
-import tensorflow as tf
-from tensorflow.keras import Model
+import tensorflow.compat.v1 as tf
+from tensorflow.compat.v1.keras import Model
 from genotypes import PRIMITIVES
 from genotypes import Genotype
 from operations import *

@@ -1,5 +1,7 @@
-import tensorflow as tf
-from tensorflow.keras import Model
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
+from tensorflow.compat.v1.keras import Model
+
 import numpy as np
 import utils
 

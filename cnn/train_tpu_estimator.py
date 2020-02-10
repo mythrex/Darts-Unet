@@ -5,7 +5,7 @@ import glob
 import numpy as np
 import logging
 import argparse
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 import numpy as np
 import utils
 from tqdm import tqdm
