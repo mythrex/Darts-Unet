@@ -1,26 +1,30 @@
-import tensorflow as tf
-from tensorflow import layers
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
+from tensorflow.compat.v1 import layers
 
 OPS = {
-    'none': lambda C, stride: Zero(stride),
-    'avg_pool_3x3': lambda C, stride: layers.AveragePooling2D(3, strides=stride, padding='same'),
-    'max_pool_3x3': lambda C, stride: layers.MaxPooling2D(3, strides=stride, padding='same'),
-    'skip_connect': lambda C, stride: Identity() if stride == 1 else FactorizedReduce(C, C),
-    'sep_conv_3x3': lambda C, stride: SepConv(C, C, 3, stride, 'same'),
-    'sep_conv_5x5': lambda C, stride: SepConv(C, C, 5, stride, 'same'),
-    'sep_conv_7x7': lambda C, stride: SepConv(C, C, 7, stride, 'same'),
-    'dil_conv_3x3': lambda C, stride: DilConv(C, C, 3, stride, 'same', 2),
-    'dil_conv_5x5': lambda C, stride: DilConv(C, C, 5, stride, 'same', 2),
-    'conv_7x1_1x7': lambda C, stride: Conv_7x1_1x7(C, stride)
+    'none': lambda C, stride, unrolled=True: Zero(stride),
+    'avg_pool_3x3': lambda C, stride, unrolled=True: MaxPool3x3(C, stride, unrolled),
+    'max_pool_3x3': lambda C, stride, unrolled=True: AvgPool3x3(C, stride, unrolled),
+    'skip_connect': lambda C, stride, unrolled=True: Identity() if stride == 1 else FactorizedReduce(C, C, unrolled),
+    'sep_conv_3x3': lambda C, stride, unrolled=True: SepConv(C, C, 3, stride, 'same', unrolled),
+    'sep_conv_5x5': lambda C, stride, unrolled=True: SepConv(C, C, 5, stride, 'same', unrolled),
+    'sep_conv_7x7': lambda C, stride, unrolled=True: SepConv(C, C, 7, stride, 'same', unrolled),
+    'dil_conv_3x3': lambda C, stride, unrolled=True: DilConv(C, C, 3, stride, 'same', 2, unrolled),
+    'dil_conv_5x5': lambda C, stride, unrolled=True: DilConv(C, C, 5, stride, 'same', 2, unrolled),
+    'conv_7x1_1x7': lambda C, stride, unrolled=True: Conv_7x1_1x7(C, stride, unrolled)
 }
 
 
 class MaxPool3x3(tf.keras.layers.Layer):
 
-    def __init__(self, C, stride):
+    def __init__(self, C, stride, unrolled=True):
         super(MaxPool3x3, self).__init__()
-        self.pool = OPS['max_pool_3x3'](C, stride)
-        self.bn = Identity()
+        self.pool = layers.AveragePooling2D(3, strides=stride, padding='same')
+        if(unrolled):
+            self.bn = layers.BatchNormalization(trainable=False)
+        else:
+            self.bn = layers.BatchNormalization()
 
     def call(self, x):
         x = self.pool(x)
@@ -30,10 +34,13 @@ class MaxPool3x3(tf.keras.layers.Layer):
 
 class AvgPool3x3(tf.keras.layers.Layer):
 
-    def __init__(self, C, stride):
+    def __init__(self, C, stride, unrolled=True):
         super(AvgPool3x3, self).__init__()
-        self.pool = OPS['avg_pool_3x3'](C, stride)
-        self.bn = Identity()
+        self.pool = layers.MaxPooling2D(3, strides=stride, padding='same')
+        if(unrolled):
+            self.bn = layers.BatchNormalization(trainable=False)
+        else:
+            self.bn = layers.BatchNormalization()
 
     def call(self, x):
         x = self.pool(x)
@@ -45,7 +52,7 @@ class ReLUConvBN(tf.keras.layers.Layer):
     """Applies ReLU, Conv and BatchNormalisation operation
     """
 
-    def __init__(self, C_in, C_out, kernel_size, stride, padding='same'):
+    def __init__(self, C_in, C_out, kernel_size, stride, padding='same', unrolled=True):
         """Initializes the operation
 
         Args:
@@ -64,7 +71,10 @@ class ReLUConvBN(tf.keras.layers.Layer):
                                   padding='same',
                                   use_bias=False
                                   )
-        self.bn = Identity()
+        if(unrolled):
+            self.bn = layers.BatchNormalization(trainable=False)
+        else:
+            self.bn = layers.BatchNormalization()
 
     def call(self, x):
         """Applies the ReLU, Conv, BN to input
@@ -85,7 +95,7 @@ class DilConv(tf.keras.layers.Layer):
     """Applies ReLU, Conv with dilation and BatchNormalisation operation
     """
 
-    def __init__(self, C_in, C_out, kernel_size, stride, padding, dilation):
+    def __init__(self, C_in, C_out, kernel_size, stride, padding, dilation, unrolled=True):
         super(DilConv, self).__init__()
         self.relu = tf.nn.relu
         # ! Since tensorflow does not allow stride > 1 with dilation > 1
@@ -102,7 +112,10 @@ class DilConv(tf.keras.layers.Layer):
                                   padding='same',
                                   use_bias=False
                                   )
-        self.bn = Identity()
+        if(unrolled):
+            self.bn = layers.BatchNormalization(trainable=False)
+        else:
+            self.bn = layers.BatchNormalization()
 
     def call(self, x):
         """Applies the ReLU, Conv, BN to input
@@ -124,7 +137,7 @@ class SepConv(tf.keras.layers.Layer):
     """Applies ReLU, Sep Conv with dilation and BatchNormalisation operation
     """
 
-    def __init__(self, C_in, C_out, kernel_size, stride, padding):
+    def __init__(self, C_in, C_out, kernel_size, stride, padding, unrolled=True):
         super(SepConv, self).__init__()
         self.relu = tf.nn.relu
         self.conv1 = layers.Conv2D(filters=C_in,
@@ -138,7 +151,12 @@ class SepConv(tf.keras.layers.Layer):
                                    padding='same',
                                    use_bias=False
                                    )
-        self.bn1 = Identity()
+        if(unrolled):
+            self.bn1 = layers.BatchNormalization(trainable=False)
+            self.bn2 = layers.BatchNormalization(trainable=False)
+        else:
+            self.bn1 = layers.BatchNormalization()
+            self.bn2 = layers.BatchNormalization()
         self.conv3 = layers.Conv2D(filters=C_in,
                                    kernel_size=kernel_size,
                                    strides=1,
@@ -150,7 +168,6 @@ class SepConv(tf.keras.layers.Layer):
                                    padding='same',
                                    use_bias=False
                                    )
-        self.bn2 = Identity()
 
     def call(self, x):
         """Applies the ReLU, Conv, BN to input
@@ -199,7 +216,7 @@ class Zero(tf.keras.layers.Layer):
 
 class FactorizedUp(tf.keras.layers.Layer):
 
-    def __init__(self, C_in, C_out):
+    def __init__(self, C_in, C_out, unrolled=True):
         super(FactorizedUp, self).__init__()
         self.relu = tf.nn.relu
         self.trans_conv1 = layers.Conv2DTranspose(filters=C_out,
@@ -213,7 +230,10 @@ class FactorizedUp(tf.keras.layers.Layer):
                                                   padding='same',
                                                   )
 
-        self.bn = Identity()
+        if(unrolled):
+            self.bn = layers.BatchNormalization(trainable=False)
+        else:
+            self.bn = layers.BatchNormalization()
 
     def call(self, x):
         x = self.relu(x)
@@ -224,7 +244,7 @@ class FactorizedUp(tf.keras.layers.Layer):
 
 class Conv_7x1_1x7(tf.keras.layers.Layer):
 
-    def __init__(self, C, stride):
+    def __init__(self, C, stride, unrolled=True):
         super(Conv_7x1_1x7, self).__init__()
         self.relu = tf.nn.relu
         self.conv1 = layers.Conv2D(filters=C,
@@ -237,7 +257,10 @@ class Conv_7x1_1x7(tf.keras.layers.Layer):
                                    strides=(stride, 1),
                                    padding='same',
                                    use_bias=False)
-        self.bn = Identity()
+        if(unrolled):
+            self.bn = layers.BatchNormalization(trainable=False)
+        else:
+            self.bn = layers.BatchNormalization()
 
     def call(self, x):
         x = self.relu(x)
@@ -251,7 +274,7 @@ class FactorizedReduce(tf.keras.layers.Layer):
     """Applies ReLU, conv with stride=2 and c_out/2 
     """
 
-    def __init__(self, C_in, C_out):
+    def __init__(self, C_in, C_out, unrolled=True):
         super(FactorizedReduce, self).__init__()
         assert C_out % 2 == 0
         self.relu = tf.nn.relu
@@ -265,7 +288,10 @@ class FactorizedReduce(tf.keras.layers.Layer):
                                     strides=2,
                                     padding='same',
                                     use_bias=False)
-        self.bn = Identity()
+        if(unrolled):
+            self.bn = layers.BatchNormalization(trainable=False)
+        else:
+            self.bn = layers.BatchNormalization()
 
     def call(self, x):
         """concats conv and Batch normalise them
