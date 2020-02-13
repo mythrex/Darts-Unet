@@ -1,24 +1,24 @@
-import torch
-import torch.nn as nn
+import tensorflow as tf
+import numpy as np
+from tensorflow.keras import Model
 from operations import *
-from torch.autograd import Variable
-from utils import drop_path
+from genotypes import UNET_NAS as genotype
+tf.enable_eager_execution()
 
 
-class Cell(nn.Module):
-
+class Cell(Model):
     def __init__(self, genotype, C_prev_prev, C_prev, C, reduction, reduction_prev, upsample_prev):
         super(Cell, self).__init__()
         self.reduction = reduction
-        reduction_prev = reduction_prev
+        self.reduction_prev = reduction_prev
 
         if reduction_prev:
-            self.preprocess0 = FactorizedReduce(C_prev_prev, C)
+            self.preprocess0 = FactorizedReduce(C_prev_prev, C, False)
         elif upsample_prev:
-            self.preprocess0 = FactorizedUp(C_prev_prev, C, affine=False)
+            self.preprocess0 = FactorizedUp(C_prev_prev, C, False)
         else:
-            self.preprocess0 = ReLUConvBN(C_prev_prev, C, 1, 1, 0)
-        self.preprocess1 = ReLUConvBN(C_prev, C, 1, 1, 0)
+            self.preprocess0 = ReLUConvBN(C_prev_prev, C, 1, 1, 0, False)
+        self.preprocess1 = ReLUConvBN(C_prev, C, 1, 1, 0, False)
 
         if reduction:
             op_names, indices = zip(*genotype.reduce)
@@ -34,14 +34,14 @@ class Cell(nn.Module):
         self._concat = concat
         self.multiplier = len(concat)
 
-        self._ops = nn.ModuleList()
+        self._ops = []
         for name, index in zip(op_names, indices):
             stride = 2 if reduction and index < 2 else 1
-            op = OPS[name](C, stride, True)
+            op = OPS[name](C, stride, False)
             self._ops += [op]
         self._indices = indices
 
-    def forward(self, s0, s1):
+    def call(self, s0, s1):
         s0 = self.preprocess0(s0)
         s1 = self.preprocess1(s1)
 
@@ -53,30 +53,28 @@ class Cell(nn.Module):
             op2 = self._ops[2*i+1]
             h1 = op1(h1)
             h2 = op2(h2)
-
             s = h1 + h2
             states += [s]
-        return torch.cat([states[i] for i in self._concat], dim=1)
+
+        return tf.concat([states[i] for i in self._concat], axis=-1)
 
 
-class UpsampleCell(nn.Module):
+class UpsampleCell(Model):
 
     def __init__(self, genotype, C_prev_prev, C_prev, C):
         super(UpsampleCell, self).__init__()
-        self.preprocess0 = ReLUConvBN(C_prev_prev, C, 1, 1, 0, affine=False)
-        self.preprocess1 = ReLUConvBN(C_prev, C, 1, 1, 0, affine=False)
+        self.preprocess0 = ReLUConvBN(C_prev_prev, C, 1, 1, 0, unrolled=False)
+        self.preprocess1 = ReLUConvBN(C_prev, C, 1, 1, 0, unrolled=False)
         concat = genotype.normal_concat
         self.multiplier = len(concat)
-        self.UpConv = nn.ConvTranspose2d(C,
-                                         C*self.multiplier,
-                                         kernel_size=3,
-                                         stride=2,
-                                         padding=1,
-                                         output_padding=1,
-                                         dilation=1)
+        self.UpConv = tf.keras.layers.Conv2DTranspose(C*self.multiplier,
+                                                      kernel_size=3,
+                                                      strides=2,
+                                                      padding='same',
+                                                      output_padding=1)
         self.reduction = False
 
-    def forward(self, s0, s1):
+    def call(self, s0, s1):
         s0 = self.preprocess0(s0)
         s1 = self.preprocess1(s1)
 
@@ -86,31 +84,29 @@ class UpsampleCell(nn.Module):
         return s0 + s1
 
 
-class Network(nn.Module):
-
+class Network(Model):
     def __init__(self, C, num_classes, layers, genotype):
         super(Network, self).__init__()
         assert layers % 2 == 1
+        stem_multiplier = 3
+        C_curr = C * stem_multiplier
+        self._layers_ = layers
+        self.num_classes = num_classes
+        self.stem_op = tf.keras.Sequential()
+        self.stem_op.add(tf.keras.layers.Conv2D(
+            C_curr, 3, use_bias=False, padding="same"))
+        self.stem_op.add(tf.keras.layers.BatchNormalization())
 
-        self._layers = layers
-
-        C_curr = 12
-        self.stem = nn.Sequential(
-            nn.Conv2d(C, C_curr, 3, padding=1, bias=False),
-            nn.BatchNorm2d(C_curr)
-        )
-
-        C_prev_prev, C_prev, C_curr = C_curr, C_curr, C_curr
-        self.cells = nn.ModuleList()
+        C_prev_prev, C_prev, C_curr = C_curr, C_curr, C
+        self.cells = []
         reduction_prev = False
 
-        self.skip_ops = nn.ModuleList()
+        self.skip_ops = []
         # Downsample
         for i in range(layers):
             if i % 2 == 1:
                 C_curr *= 2
                 reduction = True
-
                 self.skip_ops += [SkipConnection(C_prev)]
             else:
                 reduction = False
@@ -145,20 +141,15 @@ class Network(nn.Module):
 
             C_prev_prev, C_prev = C_prev, cell.multiplier*C_curr
 
-        self.sigmoidConv = nn.Sequential(
-            nn.Conv2d(C_prev,
-                      1,
-                      kernel_size=1,
-                      stride=1,
-                      padding=0
-                      ),
-            nn.Sigmoid()
-        )
+        self.softmaxConv = tf.keras.Sequential(name="softmaxConv")
+        self.softmaxConv.add(tf.keras.layers.Conv2D(
+            self.num_classes, kernel_size=1, strides=1, padding='same'))
+        self.softmaxConv.add(tf.keras.layers.Softmax())
 
-    def forward(self, input):
-        s0 = s1 = self.stem(input)
+    def call(self, input):
+        s0 = s1 = self.stem_op(input)
         pos = -1
-        middle = self._layers - 1
+        middle = self._layers_ - 1
         skip_cells = []
         skip_ops = list(self.skip_ops)
 
@@ -172,4 +163,4 @@ class Network(nn.Module):
                 s1 = skip_ops[pos](skip_cells[pos], s1)
                 pos -= 1
 
-        return self.sigmoidConv(s1)
+        return self.softmaxConv(s1)

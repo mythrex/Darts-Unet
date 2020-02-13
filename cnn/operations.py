@@ -1,6 +1,6 @@
+from tensorflow.compat.v1 import layers
 import tensorflow.compat.v1 as tf
 tf.disable_v2_behavior()
-from tensorflow.compat.v1 import layers
 
 OPS = {
     'none': lambda C, stride, unrolled=True: Zero(stride),
@@ -303,7 +303,7 @@ class FactorizedReduce(tf.keras.layers.Layer):
             tensor: tensor of operations on input
         """
         x = self.relu(x)
-        out = tf.concat([self.conv_1(x), self.conv_2(x[:, 1:, 1:, :])], axis=3)
+        out = tf.concat([self.conv_1(x), self.conv_2(x)], axis=3)
         out = self.bn(out)
         return out
 
